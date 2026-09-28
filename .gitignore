@@ -1,0 +1,15 @@
+node_modules/
+server/.env
+*.jks
+*.keystore
+*.apk
+*.aab
+.gradle/
+local.properties
+android-admin/.gradle/
+android-client/.gradle/
+android-admin/app/release/
+android-client/app/release/
+android-admin/app/debug/
+android-client/app/debug/
+google-services.json

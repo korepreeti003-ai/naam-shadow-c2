@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  boom-server:
+    build: ./server
+    container_name: boom-panel
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/boom_panel
+      - JWT_SECRET=${JWT_SECRET}
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - TG_CHAT_ID=${TG_CHAT_ID}
+    depends_on:
+      - mongo
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+
+  mongo:
+    image: mongo:7
+    container_name: boom-mongo
+    restart: always
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+
+volumes:
+  mongo_data:
