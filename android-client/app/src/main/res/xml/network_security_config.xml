@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Allow cleartext to localhost/emulator in debug only -->
+<network-security-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+        <base-config cleartextTrafficPermitted="true" />
+    </debug-overrides>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BOOM PANEL</string>
+    <string name="verify_title">Verify Your Device</string>
+    <string name="verify_subtitle">A one-time ₹1 charge confirms your device\nand links it to your account.</string>
+    <string name="btn_continue">Continue to Payment</string>
+    <string name="payment_title">₹1 Verification Payment</string>
+    <string name="activation_title">Device Activated</string>
+    <string name="activation_subtitle">Scan the QR code to complete enrollment</string>
+</resources>
