@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BOOM PANEL — Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --border:    #2a2d3e;
+      --accent:    #6c63ff;
+      --accent2:   #00d4aa;
+      --danger:    #ff4d6d;
+      --warn:      #ffd166;
+      --text:      #e0e0f0;
+      --muted:     #7a7a9a;
+      --radius:    8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: .5px; }
+    header .demo-badge {
+      background: var(--warn);
+      color: #000;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    header .spacer { flex: 1; }
+    header input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      width: 220px;
+    }
+    header button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 7px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    header button:hover { opacity: .9; }
+
+    .layout { display: flex; min-height: calc(100vh - 57px); }
+
+    nav {
+      width: 200px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 16px 0;
+      flex-shrink: 0;
+    }
+    nav a {
+      display: block;
+      padding: 10px 20px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+      border-left: 3px solid transparent;
+      transition: all .15s;
+    }
+    nav a:hover, nav a.active {
+      color: var(--text);
+      background: rgba(108,99,255,.12);
+      border-left-color: var(--accent);
+    }
+
+    main { flex: 1; padding: 24px; overflow: auto; }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .stat-card .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .value.green  { color: var(--accent2); }
+    .stat-card .value.purple { color: var(--accent);  }
+    .stat-card .value.red    { color: var(--danger);  }
+    .stat-card .value.yellow { color: var(--warn);    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    .card h2 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 14px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-green  { background: rgba(0,212,170,.15); color: var(--accent2); }
+    .badge-red    { background: rgba(255,77,109,.15); color: var(--danger);  }
+    .badge-yellow { background: rgba(255,209,102,.15); color: var(--warn);   }
+    .badge-grey   { background: rgba(122,122,154,.15); color: var(--muted);  }
+    .badge-purple { background: rgba(108,99,255,.15); color: var(--accent);  }
+
+    .btn-sm {
+      background: var(--danger);
+      color: #fff;
+      border: none;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .btn-sm:hover { opacity: .85; }
+    .btn-sm:disabled { opacity: .4; cursor: default; }
+
+    .mono { font-family: monospace; font-size: 11px; color: var(--muted); }
+
+    .page-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .page-controls button {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .page-controls button:disabled { opacity: .4; cursor: default; }
+
+    #view-audit, #view-devices { display: none; }
+    #view-devices.active, #view-audit.active { display: block; }
+
+    .search-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .search-row input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+    }
+
+    .loading { color: var(--muted); padding: 20px; text-align: center; }
+    .error-msg { color: var(--danger); padding: 12px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>BOOM PANEL</h1>
+  <span class="demo-badge">DEMO</span>
+  <span class="spacer"></span>
+  <input type="password" id="apiKeyInput" placeholder="Admin API Key" value="DEMO_ADMIN_KEY" />
+  <button onclick="loadAll()">Refresh</button>
+</header>
+
+<div class="layout">
+  <nav>
+    <a href="#" class="active" onclick="showView('devices', this)">Devices</a>
+    <a href="#" onclick="showView('audit', this)">Audit Log</a>
+  </nav>
+
+  <main>
+    <div id="stats-row" class="stats-row">
+      <div class="stat-card"><div class="label">Total</div><div class="value" id="s-total">—</div></div>
+      <div class="stat-card"><div class="label">Paid</div><div class="value yellow" id="s-paid">—</div></div>
+      <div class="stat-card"><div class="label">Activated</div><div class="value green" id="s-activated">—</div></div>
+      <div class="stat-card"><div class="label">QR Used</div><div class="value purple" id="s-qr">—</div></div>
+      <div class="stat-card"><div class="label">Revoked</div><div class="value red" id="s-revoked">—</div></div>
+    </div>
+
+    <div id="view-devices" class="active">
+      <div class="card">
+        <h2>Device Verifications</h2>
+        <div class="search-row">
+          <input type="text" id="search-input" placeholder="Filter by device ID or tenant…" oninput="filterTable()" />
+        </div>
+        <div id="devices-table-wrap">
+          <div class="loading">Loading…</div>
+        </div>
+        <div class="page-controls">
+          <button id="btn-prev" onclick="prevPage()" disabled>← Prev</button>
+          <span id="page-info">—</span>
+          <button id="btn-next" onclick="nextPage()">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-audit">
+      <div class="card">
+        <h2>Audit Log</h2>
+        <div id="audit-table-wrap"><div class="loading">Loading…</div></div>
+        <div class="page-controls">
+          <button id="btn-audit-prev" onclick="prevAudit()" disabled>← Prev</button>
+          <span id="audit-page-info">—</span>
+          <button id="btn-audit-next" onclick="nextAudit()">Next →</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const BASE = '';
+let allDevices = [];
+let devOffset = 0, devLimit = 20, devTotal = 0;
+let audOffset = 0, audLimit = 50, audTotal = 0;
+let currentView = 'devices';
+
+function apiKey() {
+  return document.getElementById('apiKeyInput').value.trim();
+}
+
+function headers() {
+  return { 'Content-Type': 'application/json', 'x-admin-key': apiKey() };
+}
+
+function showView(name, el) {
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('view-devices').classList.toggle('active', name === 'devices');
+  document.getElementById('view-audit').classList.toggle('active', name === 'audit');
+  currentView = name;
+  if (name === 'audit') loadAudit();
+}
+
+async function loadAll() {
+  loadStats();
+  loadDevices();
+  if (currentView === 'audit') loadAudit();
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch(`${BASE}/api/admin/stats`, { headers: headers() });
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('s-total').textContent    = d.total    ?? '—';
+    document.getElementById('s-paid').textContent     = d.paid     ?? '—';
+    document.getElementById('s-activated').textContent= d.activated?? '—';
+    document.getElementById('s-qr').textContent       = d.qr_used  ?? '—';
+    document.getElementById('s-revoked').textContent  = d.revoked  ?? '—';
+  } catch {}
+}
+
+async function loadDevices() {
+  const wrap = document.getElementById('devices-table-wrap');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const r = await fetch(`${BASE}/api/admin/devices?limit=${devLimit}&offset=${devOffset}`, { headers: headers() });
+    if (!r.ok) { wrap.innerHTML = `<div class="error-msg">Error ${r.status}</div>`; return; }
+    const d = await r.json();
+    devTotal = d.total;
+    allDevices = d.rows;
+    renderDevices(allDevices);
+    updatePageInfo();
+  } catch (e) {
+    wrap.innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+function statusBadge(status) {
+  const map = { activated:'badge-green', pending:'badge-yellow', revoked:'badge-red', paid:'badge-purple' };
+  return `<span class="badge ${map[status]||'badge-grey'}">${status}</span>`;
+}
+
+function renderDevices(rows) {
+  const wrap = document.getElementById('devices-table-wrap');
+  if (!rows.length) { wrap.innerHTML = '<div class="loading">No records</div>'; return; }
+  wrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Device ID</th>
+          <th>Tenant ID</th>
+          <th>Order ID</th>
+          <th>Payment</th>
+          <th>Activation</th>
+          <th>QR Used</th>
+          <th>Verified At</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td class="mono">${r.device_id}</td>
+            <td class="mono">${r.tenant_id}</td>
+            <td class="mono">${r.order_id || '—'}</td>
+            <td>${statusBadge(r.payment_status)}</td>
+            <td>${statusBadge(r.activation_status)}</td>
+            <td><span class="badge ${r.qr_used ? 'badge-red' : 'badge-grey'}">${r.qr_used ? 'Yes' : 'No'}</span></td>
+            <td>${r.verified_at ? new Date(r.verified_at).toLocaleString() : '—'}</td>
+            <td>
+              <button class="btn-sm"
+                onclick="revoke('${r.order_id}', this)"
+                ${r.activation_status === 'revoked' ? 'disabled' : ''}>
+                Revoke
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
+function filterTable() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  renderDevices(allDevices.filter(r =>
+    r.device_id.toLowerCase().includes(q) ||
+    r.tenant_id.toLowerCase().includes(q) ||
+    (r.order_id||'').toLowerCase().includes(q)
+  ));
+}
+
+async function revoke(orderId, btn) {
+  if (!confirm(`Revoke activation for order ${orderId}?`)) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${BASE}/api/admin/revoke/${orderId}`, {
+      method: 'POST', headers: headers()
+    });
+    const d = await r.json();
+    if (d.success) { loadAll(); } else { alert(d.error); btn.disabled = false; }
+  } catch (e) { alert(e.message); btn.disabled = false; }
+}
+
+function updatePageInfo() {
+  const start = devOffset + 1;
+  const end   = Math.min(devOffset + devLimit, devTotal);
+  document.getElementById('page-info').textContent = `${start}–${end} of ${devTotal}`;
+  document.getElementById('btn-prev').disabled = devOffset === 0;
+  document.getElementById('btn-next').disabled = devOffset + devLimit >= devTotal;
+}
+
+function prevPage() { if (devOffset > 0) { devOffset -= devLimit; loadDevices(); } }
+function nextPage() { if (devOffset + devLimit < devTotal) { devOffset += devLimit; loadDevices(); } }
+
+async function loadAudit() {
+  const wrap = document.getElementById('audit-table-wrap');
+  wrap.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const r = await fetch(`${BASE}/api/admin/audit-log?limit=${audLimit}&offset=${audOffset}`, { headers: headers() });
+    if (!r.ok) { wrap.innerHTML = `<div class="error-msg">Error ${r.status}</div>`; return; }
+    const d = await r.json();
+    audTotal = d.total;
+    if (!d.rows.length) { wrap.innerHTML = '<div class="loading">No log entries</div>'; return; }
+    wrap.innerHTML = `
+      <table>
+        <thead><tr><th>Time</th><th>Event</th><th>Device ID</th><th>Tenant</th><th>Order</th><th>Detail</th></tr></thead>
+        <tbody>
+          ${d.rows.map(r => `
+            <tr>
+              <td class="mono">${new Date(r.created_at).toLocaleString()}</td>
+              <td><span class="badge badge-purple">${r.event}</span></td>
+              <td class="mono">${r.device_id||'—'}</td>
+              <td class="mono">${r.tenant_id||'—'}</td>
+              <td class="mono">${r.order_id||'—'}</td>
+              <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${r.detail||'—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+    document.getElementById('audit-page-info').textContent =
+      `${audOffset+1}–${Math.min(audOffset+audLimit, audTotal)} of ${audTotal}`;
+    document.getElementById('btn-audit-prev').disabled = audOffset === 0;
+    document.getElementById('btn-audit-next').disabled = audOffset + audLimit >= audTotal;
+  } catch (e) { wrap.innerHTML = `<div class="error-msg">${e.message}</div>`; }
+}
+
+function prevAudit() { if (audOffset > 0) { audOffset -= audLimit; loadAudit(); } }
+function nextAudit() { if (audOffset + audLimit < audTotal) { audOffset += audLimit; loadAudit(); } }
+
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>
