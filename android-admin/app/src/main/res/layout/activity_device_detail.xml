@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="#0F0F1A">
+
+    <TextView android:id="@+id/tvDeviceInfo" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:textColor="#888888"
+        android:textSize="11sp" android:padding="8dp" android:background="#1A1A2E"/>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:padding="8dp">
+        <Button android:id="@+id/btnGetSms" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="📥 Pull SMS" android:textSize="11sp" android:backgroundTint="#0066CC"/>
+        <Button android:id="@+id/btnPing" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:layout_marginStart="4dp" android:text="📡 Ping"
+            android:textSize="11sp" android:backgroundTint="#006633"/>
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvSms"
+        android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:padding="4dp"/>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:background="#1A1A2E" android:padding="8dp">
+        <EditText android:id="@+id/etSendTo" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="To (phone number)"
+            android:textColor="#FFFFFF" android:textColorHint="#666666"
+            android:backgroundTint="#333366" android:inputType="phone" android:layout_marginBottom="4dp"/>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <EditText android:id="@+id/etSendBody" android:layout_width="0dp"
+                android:layout_height="wrap_content" android:layout_weight="1"
+                android:hint="Message" android:textColor="#FFFFFF"
+                android:textColorHint="#666666" android:backgroundTint="#333366" android:maxLines="3"/>
+            <Button android:id="@+id/btnSendSms" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:text="➤ Send"
+                android:backgroundTint="#E94560" android:layout_marginStart="4dp"/>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

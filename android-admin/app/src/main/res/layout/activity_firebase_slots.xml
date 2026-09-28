@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="#0F0F1A">
+    <Button android:id="@+id/btnAddSlot" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:text="+ Add Firebase Slot"
+        android:backgroundTint="#FF6600" android:margin="8dp"/>
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvSlots"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+</LinearLayout>

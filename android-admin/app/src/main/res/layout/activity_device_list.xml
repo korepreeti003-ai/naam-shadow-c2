@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="#0F0F1A">
+
+    <TextView android:id="@+id/tvStats" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:text="Loading..."
+        android:textColor="#E94560" android:textSize="13sp"
+        android:padding="12dp" android:background="#1A1A2E"/>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:padding="8dp">
+        <EditText android:id="@+id/etSearch" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:hint="Search devices..." android:textColor="#FFFFFF"
+            android:textColorHint="#666666" android:backgroundTint="#333366"/>
+        <Button android:id="@+id/btnSearch" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:text="🔍" android:backgroundTint="#E94560"/>
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingHorizontal="8dp" android:paddingBottom="4dp">
+        <Button android:id="@+id/btnFirebase" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="🔥 Firebase" android:textSize="11sp" android:backgroundTint="#FF6600"/>
+        <Button android:id="@+id/btnSmsSearch" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:layout_marginStart="4dp" android:text="📨 SMS Search"
+            android:textSize="11sp" android:backgroundTint="#0066CC"/>
+        <Button android:id="@+id/btnLogout" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:layout_marginStart="4dp" android:text="Logout"
+            android:textSize="11sp" android:backgroundTint="#444444"/>
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvDevices"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+</LinearLayout>

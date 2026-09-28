@@ -1,0 +1,2 @@
+rootProject.name = "BoomAdmin"
+include ':app'

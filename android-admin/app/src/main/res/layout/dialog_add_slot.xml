@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:padding="16dp">
+    <EditText android:id="@+id/etSlotName" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:hint="Slot Name (e.g. Slot-1)" android:layout_marginBottom="8dp"/>
+    <EditText android:id="@+id/etProjectId" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:hint="Firebase Project ID" android:layout_marginBottom="8dp"/>
+    <EditText android:id="@+id/etServiceJson" android:layout_width="match_parent"
+        android:layout_height="120dp" android:hint="Paste service-account.json content here"
+        android:gravity="top" android:layout_marginBottom="8dp"/>
+    <EditText android:id="@+id/etMaxDevices" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:hint="Max devices (default 10000)" android:inputType="number"/>
+</LinearLayout>
