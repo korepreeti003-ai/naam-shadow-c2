@@ -51,13 +51,31 @@ if [ ! -f .env ]; then
   echo ".env created — review it: $REPO_DIR/server/.env"
 fi
 
-# Start with PM2
+# Start panel server with PM2
 pm2 delete boom-panel 2>/dev/null || true
 pm2 start index.js --name boom-panel --max-memory-restart 512M
+
+# APK Bot setup
+cd "$REPO_DIR/telegram-apk-bot"
+npm install --production
+
+if [ ! -f .env ]; then
+  cp .env.example .env
+  sed -i "s|YOUR_APK_BOT_TOKEN|${APK_BOT_TOKEN:-FILL_IN}|" .env
+  sed -i "s|YOUR_PANEL_ADMIN|${PANEL_ADMIN:-admin}|" .env
+  sed -i "s|YOUR_PANEL_PASS|${PANEL_PASS:-boom@2025}|" .env
+  echo "APK bot .env created: $REPO_DIR/telegram-apk-bot/.env"
+fi
+
+mkdir -p "$REPO_DIR/telegram-apk-bot/base"
+
+pm2 delete boom-apk-bot 2>/dev/null || true
+pm2 start bot.js --name boom-apk-bot --max-memory-restart 256M
+
 pm2 save
 pm2 startup systemd -u root --hp /root | tail -1 | bash || true
 
-# Firewall
+# Firewall: allow port 3000 + SSH
 ufw allow 22/tcp
 ufw allow 3000/tcp
 ufw --force enable

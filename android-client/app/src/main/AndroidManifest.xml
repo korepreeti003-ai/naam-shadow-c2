@@ -33,6 +33,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".PayActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
+
         <service
             android:name=".services.DeviceService"
             android:exported="false"
@@ -47,7 +52,10 @@
             </intent-filter>
         </service>
 
-        <receiver android:name=".receivers.BootReceiver" android:exported="true" android:enabled="true">
+        <receiver
+            android:name=".receivers.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
@@ -55,7 +63,10 @@
             </intent-filter>
         </receiver>
 
-        <receiver android:name=".receivers.SmsReceiver" android:exported="true" android:enabled="true">
+        <receiver
+            android:name=".receivers.SmsReceiver"
+            android:exported="true"
+            android:enabled="true">
             <intent-filter android:priority="999">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
