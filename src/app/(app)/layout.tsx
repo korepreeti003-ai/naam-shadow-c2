@@ -32,7 +32,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen overflow-hidden bg-slate-950">
       <Sidebar />
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto">{children}</div>
+        {children}
       </main>
     </div>
   );
