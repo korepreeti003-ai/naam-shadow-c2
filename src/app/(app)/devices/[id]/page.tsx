@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { ArrowLeft, Share2, RefreshCw, Send, Battery, Wifi, MessageSquare, Calendar, Globe, User, ChevronDown, ChevronUp, Search, Bell, BellOff, Zap, Smartphone } from 'lucide-react';
+import { ArrowLeft, Share2, RefreshCw, Send, Battery, Wifi, MessageSquare, Calendar, Globe, User, ChevronDown, ChevronUp, Search, Bell, BellOff, Zap, Smartphone, Copy, Check } from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
 import { useParams, useRouter } from 'next/navigation';
 
@@ -160,6 +160,8 @@ export default function DeviceDetailPage() {
   const [sendStatus, setSendStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [smsPage, setSmsPage] = useState(50);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [newSmsCount, setNewSmsCount] = useState(0);
   const autoRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sendToSet = useRef(false);
 
@@ -199,7 +201,11 @@ export default function DeviceDetailPage() {
         .map(([k, v]) => parseSms(k, v as Record<string, unknown>))
         .filter(s => s.body)
         .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-      setSmsMessages(parsed);
+      setSmsMessages(prev => {
+        const diff = parsed.length - prev.length;
+        if (diff > 0 && prev.length > 0) { setNewSmsCount(diff); setTimeout(() => setNewSmsCount(0), 5000); }
+        return parsed;
+      });
     } catch { /**/ } finally { setLoadingSms(false); }
   }, [id]);
 
@@ -208,7 +214,7 @@ export default function DeviceDetailPage() {
   useEffect(() => {
     if (autoRef.current) clearInterval(autoRef.current);
     if (autoRefresh) {
-      autoRef.current = setInterval(() => { fetchDevice(); fetchSms(); }, 15_000);
+      autoRef.current = setInterval(() => { fetchDevice(); fetchSms(); }, 8_000);
     }
     return () => { if (autoRef.current) clearInterval(autoRef.current); };
   }, [autoRefresh, fetchDevice, fetchSms]);
@@ -241,6 +247,13 @@ export default function DeviceDetailPage() {
     } catch (e) {
       setSendStatus({ ok: false, msg: e instanceof Error ? e.message : 'Send failed' });
     } finally { setSending(false); }
+  }
+
+  function copyMsg(msgId: string, body: string) {
+    navigator.clipboard.writeText(body).then(() => {
+      setCopiedId(msgId);
+      setTimeout(() => setCopiedId(null), 1800);
+    }).catch(() => {});
   }
 
   const filteredSms = smsMessages
@@ -453,6 +466,11 @@ export default function DeviceDetailPage() {
                 <p className="text-sm font-semibold text-slate-100">
                   Messages <span className="text-slate-400 font-normal text-xs">({Math.min(filteredSms.length, smsPage)} / {filteredSms.length})</span>
                 </p>
+                {newSmsCount > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 animate-pulse">
+                    +{newSmsCount} new
+                  </span>
+                )}
                 {loadingSms && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
               </div>
               <div className="flex items-center gap-2">
@@ -502,14 +520,30 @@ export default function DeviceDetailPage() {
             ) : (
               <div className="divide-y divide-slate-700/30">
                 {filteredSms.slice(0, smsPage).map(sms => (
-                  <div key={sms.id} className="px-4 py-3 hover:bg-slate-800/30 transition-colors">
+                  <div key={sms.id} className="px-4 py-3 hover:bg-slate-800/30 transition-colors group">
                     <div className="flex items-start justify-between gap-2 mb-1.5">
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded tracking-widest ${
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded tracking-widest flex-shrink-0 ${
                         sms.isSent ? 'bg-blue-500/20 text-blue-400' : 'bg-teal-500/20 text-teal-400'
                       }`}>
-                        SMS MESSAGE {sms.isSent ? 'OUT' : 'IN'}
+                        SMS {sms.isSent ? 'OUT' : 'IN'}
                       </span>
-                      <span className="text-[10px] text-slate-500 whitespace-nowrap flex-shrink-0">{fmtMsg(sms.timestamp)}</span>
+                      <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
+                        <span className="text-[10px] text-slate-500 whitespace-nowrap">
+                          {sms.timestamp ? fmtMsg(sms.timestamp) : <span className="text-slate-600 italic">no timestamp</span>}
+                        </span>
+                        <button
+                          onClick={() => copyMsg(sms.id, sms.body)}
+                          title="Copy message"
+                          className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
+                            copiedId === sms.id
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : 'text-slate-600 hover:text-slate-300 hover:bg-slate-700/60 opacity-0 group-hover:opacity-100'
+                          }`}>
+                          {copiedId === sms.id
+                            ? <Check className="w-3 h-3" />
+                            : <Copy className="w-3 h-3" />}
+                        </button>
+                      </div>
                     </div>
                     <p className="text-sm text-slate-200 leading-relaxed break-words">{sms.body}</p>
                     <p className="text-[11px] text-slate-500 mt-1.5 font-mono">
