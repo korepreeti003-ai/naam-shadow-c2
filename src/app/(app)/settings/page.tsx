@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Shield, Bell, Database, Key, Info, Lock, Unlock, Plus, Trash2, Loader2 } from 'lucide-react';
+import { Shield, Bell, Database, Key, Info, Lock, Unlock, Plus, Trash2, Loader2, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
 import { useTheme } from '@/components/theme-provider';
 import { apiFetch } from '@/hooks/useApi';
@@ -23,7 +23,6 @@ export default function SettingsPage() {
   );
   const [copied, setCopied] = useState(false);
 
-  // ─── Firebase Projects locked section ───────────────────────────────────
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState('');
@@ -33,9 +32,11 @@ export default function SettingsPage() {
   const [loadingProjects, setLoadingProjects] = useState(false);
 
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', notes: '' });
+  const [form, setForm] = useState({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', devicesPath: 'devices', notes: '' });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncResult, setSyncResult] = useState<Record<string, string>>({});
 
   function copyWebhook() {
     navigator.clipboard.writeText(webhookUrl);
@@ -80,18 +81,43 @@ export default function SettingsPage() {
     if (!form.name || !form.projectId) { setSaveError('Name and Project ID are required'); return; }
     setSaving(true); setSaveError('');
     try {
+      const payload = {
+        ...form,
+        serviceAccountJson: form.serviceAccountJson.trim() || null,
+      };
       await apiFetch('/api/settings/firebase-projects', idToken!, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-settings-token': pwInput },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
-      setForm({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', notes: '' });
+      setForm({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', devicesPath: 'devices', notes: '' });
       setAddOpen(false);
       await loadProjects(pwInput);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Save failed');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSync(projectDocId: string) {
+    setSyncingId(projectDocId);
+    setSyncResult((r) => ({ ...r, [projectDocId]: '' }));
+    try {
+      const data = await apiFetch<{ synced: number; path: string; message?: string }>(
+        '/api/settings/firebase-projects/sync',
+        idToken!,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-settings-token': pwInput },
+          body: JSON.stringify({ projectDocId }),
+        }
+      );
+      setSyncResult((r) => ({ ...r, [projectDocId]: `✓ ${data?.synced ?? 0} devices synced` }));
+    } catch (e) {
+      setSyncResult((r) => ({ ...r, [projectDocId]: `✗ ${e instanceof Error ? e.message : 'Sync failed'}` }));
+    } finally {
+      setSyncingId(null);
     }
   }
 
@@ -114,7 +140,6 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {/* Account */}
       <div className="card p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Shield className="w-5 h-5 text-brand-500" />
@@ -136,7 +161,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Appearance */}
       <div className="card p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Bell className="w-5 h-5 text-brand-500" />
@@ -164,7 +188,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Device Webhook */}
       <div className="card p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Database className="w-5 h-5 text-brand-500" />
@@ -186,13 +209,12 @@ export default function SettingsPage() {
           <div className="text-xs text-blue-700 dark:text-blue-400 space-y-1">
             <p>Expected POST body fields:</p>
             <code className="block font-mono">
-              {`{ "deviceId": "...", "type": "DELIVERY_RECEIPT" | "HEARTBEAT", "messageId": "...", "delivered": true/false }`}
+              {'{ "deviceId": "...", "type": "DELIVERY_RECEIPT" | "HEARTBEAT", "messageId": "...", "delivered": true/false }'}
             </code>
           </div>
         </div>
       </div>
 
-      {/* Firebase Config */}
       <div className="card p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Key className="w-5 h-5 text-brand-500" />
@@ -220,7 +242,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* ─── Firebase Projects (password-locked) ──────────────────────────── */}
       <div className="card p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -267,7 +288,6 @@ export default function SettingsPage() {
           </div>
         ) : (
           <>
-            {/* Add form */}
             {addOpen && (
               <div className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-3 bg-slate-50 dark:bg-slate-800/50">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-white">New Firebase Project</h3>
@@ -297,24 +317,35 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Service Account JSON <span className="text-slate-400">(paste full JSON for FCM dispatch)</span>
-                  </label>
-                  <textarea
-                    className="input text-xs font-mono h-20 resize-none"
-                    placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'
-                    value={form.serviceAccountJson}
-                    onChange={(e) => setForm((f) => ({ ...f, serviceAccountJson: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Realtime Database URL (optional)
+                    Realtime Database URL *
                   </label>
                   <input
                     className="input text-sm font-mono"
                     placeholder="https://my-project-default-rtdb.firebaseio.com"
                     value={form.rtdbUrl}
                     onChange={(e) => setForm((f) => ({ ...f, rtdbUrl: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    Devices path in RTDB <span className="text-slate-400">(default: devices)</span>
+                  </label>
+                  <input
+                    className="input text-sm font-mono"
+                    placeholder="devices"
+                    value={form.devicesPath}
+                    onChange={(e) => setForm((f) => ({ ...f, devicesPath: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    Service Account JSON <span className="text-slate-400">(optional)</span>
+                  </label>
+                  <textarea
+                    className="input text-xs font-mono h-16 resize-none"
+                    placeholder="Leave empty if RTDB rules = true"
+                    value={form.serviceAccountJson}
+                    onChange={(e) => setForm((f) => ({ ...f, serviceAccountJson: e.target.value }))}
                   />
                 </div>
                 <div>
@@ -340,14 +371,13 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* Projects list */}
             {loadingProjects ? (
               <div className="flex justify-center py-6">
                 <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
               </div>
             ) : projects.length === 0 ? (
               <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">
-                No projects added yet. Click "Add Project" to start.
+                No projects added yet. Click &quot;Add Project&quot; to start.
               </p>
             ) : (
               <div className="space-y-2">
@@ -371,12 +401,33 @@ export default function SettingsPage() {
                         <p className="text-xs text-slate-400 dark:text-slate-500">{p.notes}</p>
                       )}
                     </div>
-                    <button
-                      onClick={() => handleDelete(p.id)}
-                      className="ml-3 flex-shrink-0 text-slate-400 hover:text-red-500 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="ml-3 flex-shrink-0 flex items-center gap-2">
+                      {p.rtdbUrl && (
+                        <div className="flex flex-col items-end gap-0.5">
+                          <button
+                            onClick={() => handleSync(p.id)}
+                            disabled={syncingId === p.id}
+                            title="Sync devices from RTDB"
+                            className="text-slate-400 hover:text-brand-500 transition-colors"
+                          >
+                            {syncingId === p.id
+                              ? <Loader2 className="w-4 h-4 animate-spin" />
+                              : <RefreshCw className="w-4 h-4" />}
+                          </button>
+                          {syncResult[p.id] && (
+                            <span className={`text-xs whitespace-nowrap ${syncResult[p.id].startsWith('✓') ? 'text-emerald-500' : 'text-red-500'}`}>
+                              {syncResult[p.id]}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => handleDelete(p.id)}
+                        className="text-slate-400 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
