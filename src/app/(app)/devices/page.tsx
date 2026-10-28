@@ -97,29 +97,70 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   return { id: `${source.id}_${devId}`, sourceId: source.id, sourceName: source.name, displayName, online, fields, battery: batteryVal };
 }
 
-const RTDB_PATHS = ['devices','Users','Phones','registered','clients','data','devices_list','Devices'];
+const RTDB_PATHS = ['devices','Devices','Users','users','Phones','phones','registered','clients','data','device_list','all_devices'];
+
+function hasRealData(devs: RtdbDevice[]): boolean {
+  return devs.some(d => d.fields.length >= 1);
+}
+
+async function tryFetch(url: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+    return d as Record<string, unknown>;
+  } catch { return null; }
+}
 
 async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
   const base = source.url.replace(/\/$/, '');
   try {
-    // Try each path until we find one with real field data
+    // Try every path — pick the first one that has real field data
     for (const path of RTDB_PATHS) {
-      try {
-        const res = await fetch(`${base}/${path}.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
-        if (!res.ok) continue;
-        const data = await res.json() as Record<string, unknown> | null;
-        if (!data || typeof data !== 'object' || Object.keys(data).length === 0) continue;
-
-        const entries = Object.entries(data);
-        const devices = entries.map(([devId, raw]) => parseDevice(source, devId, raw as Record<string, unknown>));
-
-        // Check if at least some devices have real field data (not just hex IDs with no info)
-        const hasData = devices.some(d => d.fields.length > 1 || (d.fields.length === 1 && d.fields[0].label !== 'MODEL'));
-        if (hasData || path === 'devices') {
-          return { devices, ok: true };
-        }
-      } catch { continue; }
+      const data = await tryFetch(`${base}/${path}.json`);
+      if (!data || Object.keys(data).length === 0) continue;
+      const devs = Object.entries(data).map(([id, raw]) =>
+        parseDevice(source, id, typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {})
+      );
+      if (hasRealData(devs)) return { devices: devs, ok: true };
     }
+
+    // Last resort: try root level (some panels store devices at /{deviceId})
+    const root = await tryFetch(`${base}/.json?shallow=true`);
+    if (root) {
+      // Root keys that look like device IDs (hex-like or long alphanumeric)
+      const deviceKeys = Object.keys(root).filter(k =>
+        /^[0-9a-f]{8,}$/i.test(k) || /^[A-Za-z0-9_-]{15,}$/.test(k)
+      );
+      if (deviceKeys.length > 0) {
+        // Fetch first 3 to check structure
+        const samples = await Promise.all(
+          deviceKeys.slice(0, 3).map(k => tryFetch(`${base}/${k}.json`))
+        );
+        const hasDeviceData = samples.some(s => s && Object.keys(s).length > 2);
+        if (hasDeviceData) {
+          // Fetch all root-level device keys
+          const all = await tryFetch(`${base}/.json`);
+          if (all) {
+            const devs = deviceKeys
+              .filter(k => all[k] && typeof all[k] === 'object')
+              .map(k => parseDevice(source, k, all[k] as Record<string, unknown>));
+            if (hasRealData(devs)) return { devices: devs, ok: true };
+          }
+        }
+      }
+    }
+
+    // Fallback: return /devices even if empty field data
+    const fallback = await tryFetch(`${base}/devices.json`);
+    if (fallback && Object.keys(fallback).length > 0) {
+      const devs = Object.entries(fallback).map(([id, raw]) =>
+        parseDevice(source, id, typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {})
+      );
+      return { devices: devs, ok: true };
+    }
+
     return { devices: [], ok: true };
   } catch { return { devices: [], ok: false }; }
 }
