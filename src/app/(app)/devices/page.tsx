@@ -35,11 +35,12 @@ function flattenObj(raw: Record<string, unknown>): Record<string, unknown> {
   const sims = raw['sims'] ?? raw['Sims'];
   if (Array.isArray(sims) && sims.length > 0) {
     const s0 = sims[0] as Record<string, unknown>;
-    if (s0?.phoneNumber && !out['phoneNumber']) out['phoneNumber'] = s0.phoneNumber;
-    if (s0?.number && !out['number']) out['number'] = s0.number;
-    if (s0?.operator && !out['operator']) out['operator'] = s0.operator;
-    if (s0?.network && !out['network']) out['network'] = s0.network;
-    if (s0?.provider && !out['provider']) out['provider'] = s0.provider;
+    const phoneKeys = ['phoneNumber','PhoneNumber','number','Number','phone','Phone','mobile','Mobile','mobNo','MobNo','subscriberId','SubscriberId','simNumber','mobileNumber'];
+    const opKeys = ['operator','Operator','provider','Provider','carrier','Carrier','network','Network','networkName','operatorName','displayName'];
+    for (const k of phoneKeys) if (s0?.[k] && !out['phoneNumber']) out['phoneNumber'] = s0[k];
+    for (const k of opKeys) if (s0?.[k] && !out['operator']) out['operator'] = s0[k];
+    if (!out['network'] && out['operator']) out['network'] = out['operator'];
+    if (!out['provider'] && out['operator']) out['provider'] = out['operator'];
   }
   const nets = raw['networks'] ?? raw['Networks'];
   if (Array.isArray(nets) && nets.length > 0 && !out['provider']) out['provider'] = String(nets[0]);

