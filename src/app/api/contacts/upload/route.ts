@@ -3,9 +3,7 @@ import { getFirestore, COLLECTIONS } from '@/lib/firebase-admin';
 import { verifyRequest, requireRole, apiError, unauthorized, forbidden } from '@/lib/auth';
 import { parseCsvBuffer } from '@/lib/csv';
 
-export const config = {
-  api: { bodyParser: false },
-};
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
