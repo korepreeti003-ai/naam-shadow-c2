@@ -1,12 +1,18 @@
-import { getMessaging } from './firebase-admin';
+import { getMessaging, getMessagingForProject } from './firebase-admin';
 import type { FcmPayload } from '@/types';
+
+async function getMessagingInstance(projectId?: string) {
+  if (projectId) return getMessagingForProject(projectId);
+  return getMessaging();
+}
 
 export async function sendFcmMessage(
   fcmToken: string,
-  payload: FcmPayload
+  payload: FcmPayload,
+  projectId?: string
 ): Promise<{ messageId: string; success: boolean; error?: string }> {
   try {
-    const messaging = getMessaging();
+    const messaging = await getMessagingInstance(projectId);
 
     const messageId = await messaging.send({
       token: fcmToken,
@@ -16,7 +22,7 @@ export async function sendFcmMessage(
       },
       android: {
         priority: 'high',
-        ttl: 60000, // 1 minute TTL for SMS dispatch
+        ttl: 60000,
       },
     });
 
@@ -28,12 +34,10 @@ export async function sendFcmMessage(
 }
 
 export async function pingDevice(
-  fcmToken: string
+  fcmToken: string,
+  projectId?: string
 ): Promise<{ success: boolean; error?: string }> {
-  const result = await sendFcmMessage(fcmToken, {
-    type: 'PING',
-    timestamp: Date.now(),
-  });
+  const result = await sendFcmMessage(fcmToken, { type: 'PING', timestamp: Date.now() }, projectId);
   return { success: result.success, error: result.error };
 }
 
@@ -42,14 +46,12 @@ export async function dispatchSms(
   messageId: string,
   campaignId: string,
   to: string,
-  text: string
+  text: string,
+  projectId?: string
 ): Promise<{ messageId: string; success: boolean; error?: string }> {
-  return sendFcmMessage(fcmToken, {
-    type: 'SEND_SMS',
-    messageId,
-    campaignId,
-    to,
-    text,
-    timestamp: Date.now(),
-  });
+  return sendFcmMessage(
+    fcmToken,
+    { type: 'SEND_SMS', messageId, campaignId, to, text, timestamp: Date.now() },
+    projectId
+  );
 }

@@ -46,6 +46,7 @@ export interface MessageJobData {
   contactId: string;
   deviceId: string;
   fcmToken: string;
+  projectId: string;
   phone: string;
   text: string;
   retryCount: number;

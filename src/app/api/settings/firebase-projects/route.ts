@@ -31,6 +31,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       name: string;
       projectId: string;
+      serviceAccountJson?: string;
       rtdbUrl?: string;
       notes?: string;
     };
@@ -39,11 +40,19 @@ export async function POST(req: NextRequest) {
       return apiError('name and projectId are required', 400);
     }
 
+    // Validate service account JSON if provided
+    if (body.serviceAccountJson) {
+      try { JSON.parse(body.serviceAccountJson); } catch {
+        return apiError('Invalid service account JSON', 400);
+      }
+    }
+
     const db = getFirestore();
     const now = new Date().toISOString();
     const ref = await db.collection(COLLECTIONS.PROJECTS).add({
       name: body.name.trim(),
       projectId: body.projectId.trim(),
+      serviceAccountJson: body.serviceAccountJson?.trim() ?? null,
       rtdbUrl: body.rtdbUrl?.trim() ?? null,
       notes: body.notes?.trim() ?? null,
       createdAt: now,

@@ -34,6 +34,46 @@ export function getFirebaseAdmin(): admin.app.App {
   return app;
 }
 
+// ─── Per-project app cache (multi-Firebase support) ──────────────────────────
+
+const projectApps = new Map<string, admin.app.App>();
+
+export async function getMessagingForProject(projectId: string): Promise<admin.messaging.Messaging> {
+  // Return main app's messaging if projectId matches main project
+  const mainProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  if (!projectId || projectId === mainProjectId) {
+    return getFirebaseAdmin().messaging();
+  }
+
+  if (projectApps.has(projectId)) {
+    return projectApps.get(projectId)!.messaging();
+  }
+
+  // Load service account from Firestore projects collection
+  const db = getFirestore();
+  const snap = await db
+    .collection(COLLECTIONS.PROJECTS)
+    .where('projectId', '==', projectId)
+    .limit(1)
+    .get();
+
+  if (snap.empty || !snap.docs[0].data().serviceAccountJson) {
+    // Fallback to main app
+    return getFirebaseAdmin().messaging();
+  }
+
+  const serviceAccount = JSON.parse(snap.docs[0].data().serviceAccountJson as string) as admin.ServiceAccount;
+  const appName = `proj-${projectId}`;
+  const existing = admin.apps.find((a) => a?.name === appName);
+  const projApp = existing ?? admin.initializeApp({ credential: admin.credential.cert(serviceAccount) }, appName);
+  projectApps.set(projectId, projApp);
+  return projApp.messaging();
+}
+
+export function invalidateProjectApp(projectId: string): void {
+  projectApps.delete(projectId);
+}
+
 export function getFirestore(): admin.firestore.Firestore {
   return getFirebaseAdmin().firestore();
 }

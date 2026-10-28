@@ -33,7 +33,7 @@ export default function SettingsPage() {
   const [loadingProjects, setLoadingProjects] = useState(false);
 
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', projectId: '', rtdbUrl: '', notes: '' });
+  const [form, setForm] = useState({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
@@ -85,7 +85,7 @@ export default function SettingsPage() {
         headers: { 'Content-Type': 'application/json', 'x-settings-token': pwInput },
         body: JSON.stringify(form),
       });
-      setForm({ name: '', projectId: '', rtdbUrl: '', notes: '' });
+      setForm({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', notes: '' });
       setAddOpen(false);
       await loadProjects(pwInput);
     } catch (e) {
@@ -297,6 +297,17 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    Service Account JSON <span className="text-slate-400">(paste full JSON for FCM dispatch)</span>
+                  </label>
+                  <textarea
+                    className="input text-xs font-mono h-20 resize-none"
+                    placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}'
+                    value={form.serviceAccountJson}
+                    onChange={(e) => setForm((f) => ({ ...f, serviceAccountJson: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                     Realtime Database URL (optional)
                   </label>
                   <input
@@ -346,7 +357,12 @@ export default function SettingsPage() {
                     className="flex items-start justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
                   >
                     <div className="space-y-0.5 min-w-0">
-                      <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{p.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{p.name}</p>
+                        {(p as FirebaseProject & { serviceAccountJson?: string }).serviceAccountJson && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300 flex-shrink-0">FCM ready</span>
+                        )}
+                      </div>
                       <p className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate">{p.projectId}</p>
                       {p.rtdbUrl && (
                         <p className="text-xs font-mono text-slate-400 dark:text-slate-500 truncate">{p.rtdbUrl}</p>

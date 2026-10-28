@@ -71,15 +71,17 @@ async function startOrResumeCampaign(
     updatedAt: new Date().toISOString(),
   });
 
-  // Get available devices for this campaign
+  // Get ALL online devices across all Firebase projects
   const devicesSnap = await db
     .collection(COLLECTIONS.DEVICES)
     .where('status', 'in', ['online', 'idle'])
     .get();
 
-  const availableDevices = devicesSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() } as Device))
-    .filter((d) => campaign.deviceIds.includes(d.id));
+  // If campaign has specific devices selected, use only those; otherwise use all online devices
+  const allOnlineDevices = devicesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Device));
+  const availableDevices = campaign.deviceIds.length > 0
+    ? allOnlineDevices.filter((d) => campaign.deviceIds.includes(d.id))
+    : allOnlineDevices;
 
   if (availableDevices.length === 0) {
     await campaignRef.update({
@@ -159,6 +161,7 @@ async function startOrResumeCampaign(
           contactId: contact.id,
           deviceId: device.id,
           fcmToken: device.fcmToken,
+          projectId: device.projectId ?? '',
           phone: contact.phone,
           text: campaign.message,
           retryCount: 0,
@@ -237,7 +240,7 @@ async function createContactsFromBatch(
 const messageWorker = new Worker<MessageJobData>(
   QUEUE_NAMES.MESSAGE,
   async (job: Job<MessageJobData>) => {
-    const { messageId, campaignId, contactId, deviceId, fcmToken, phone, text } = job.data;
+    const { messageId, campaignId, contactId, deviceId, fcmToken, projectId, phone, text } = job.data;
     const db = getFirestore();
 
     // Check if campaign is still running
@@ -247,7 +250,7 @@ const messageWorker = new Worker<MessageJobData>(
       return;
     }
 
-    const result = await dispatchSms(fcmToken, messageId, campaignId, phone, text);
+    const result = await dispatchSms(fcmToken, messageId, campaignId, phone, text, projectId);
 
     const now = new Date().toISOString();
     const msgRef = db.collection(COLLECTIONS.MESSAGES).doc(messageId);
