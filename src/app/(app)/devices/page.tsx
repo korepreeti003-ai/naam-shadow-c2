@@ -52,8 +52,23 @@ function flattenObj(raw: Record<string, unknown>): Record<string, unknown> {
 }
 
 function isOnline(raw: Record<string, unknown>): boolean {
-  for (const k of ['online', 'Online', 'isOnline', 'IsOnline', 'connected', 'Connected']) if (raw[k] === true) return true;
-  for (const k of ['status', 'Status', 'connection', 'deviceStatus']) if (String(raw[k] ?? '').toLowerCase() === 'online') return true;
+  // boolean true
+  for (const k of ['online', 'Online', 'isOnline', 'IsOnline', 'connected', 'Connected', 'active', 'Active', 'isActive', 'IsActive', 'isConnected', 'IsConnected'])
+    if (raw[k] === true) return true;
+  // string "true" / "1" / "yes" / "online"
+  for (const k of ['online', 'Online', 'isOnline', 'connected', 'active', 'status', 'Status', 'connection', 'deviceStatus', 'state', 'State']) {
+    const v = String(raw[k] ?? '').toLowerCase();
+    if (v === 'true' || v === '1' || v === 'yes' || v === 'online' || v === 'connected' || v === 'active') return true;
+  }
+  // timestamp-based: lastSeen within 5 minutes = online
+  const tsKeys = ['lastSeen', 'LastSeen', 'updatedAt', 'UpdatedAt', 'lastActive', 'LastActive', 'lastUpdate', 'timestamp', 'time', 'lastOnline'];
+  for (const k of tsKeys) {
+    const ts = raw[k];
+    if (typeof ts === 'number' && ts > 0) {
+      const ms = ts > 9999999999 ? ts : ts * 1000;
+      if (Date.now() - ms < 5 * 60 * 1000) return true;
+    }
+  }
   return false;
 }
 
@@ -65,7 +80,7 @@ function parseDevice(devId: string, rawOrig: Record<string, unknown>): RtdbDevic
   const model = brand && modelOnly && !modelOnly.toLowerCase().startsWith(brand.toLowerCase())
     ? `${brand} ${modelOnly}` : (modelOnly || brand || '');
   const android = toStr(firstVal(raw, ['version', 'Version', 'androidVersion', 'AndroidVersion', 'android', 'Android', 'osVersion', 'OsVersion']));
-  const battery = toNum(firstVal(raw, ['batteryPercent', 'BatteryPercent', 'battery', 'Battery', 'batteryLevel', 'BatteryLevel', 'bat', 'Bat']));
+  const battery = toNum(firstVal(raw, ['batteryPercent', 'BatteryPercent', 'battery', 'Battery', 'batteryLevel', 'BatteryLevel', 'bat', 'Bat', 'level', 'Level', 'charge', 'Charge', 'pct', 'percentage', 'Percentage', 'batteryPct', 'batLevel']));
   const phone = toStr(firstVal(raw, ['mobNo', 'MobNo', 'phoneNumber', 'PhoneNumber', 'phone', 'Phone', 'number', 'Number', 'mobile', 'Mobile', 'mobileNumber']));
   const network = toStr(firstVal(raw, ['provider', 'Provider', 'network', 'Network', 'networkType', 'NetworkType', 'operator', 'Operator', 'simOperator', 'carrier', 'Carrier']));
   const ip = toStr(firstVal(raw, ['ip', 'IP', 'ipAddress', 'IpAddress']));
