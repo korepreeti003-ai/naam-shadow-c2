@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Search, RefreshCw, Wifi, WifiOff, Settings2, Loader2, ChevronLeft, ChevronRight, ToggleLeft, ToggleRight, Filter } from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 interface RtdbDevice {
@@ -122,6 +123,7 @@ function loadStr(key: string): string { try { return localStorage.getItem(key) ?
 
 export default function DevicesPage() {
   const { idToken } = useAuth();
+  const router = useRouter();
   const [devices, setDevices] = useState<RtdbDevice[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -326,7 +328,7 @@ export default function DevicesPage() {
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700/40">
                 {pageItems.map((d, i) => (
-                  <tr key={d.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${i % 2 === 0 ? '' : 'bg-slate-50/30 dark:bg-slate-800/20'}`}>
+                  <tr key={d.id} onClick={() => router.push(`/devices/${d.id}`)} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer ${i % 2 === 0 ? '' : 'bg-slate-50/30 dark:bg-slate-800/20'}`}>
                     <td className="px-4 py-3"><StatusBadge online={d.online} /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
