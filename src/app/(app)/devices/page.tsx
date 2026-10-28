@@ -46,21 +46,47 @@ async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDe
     if (!data || typeof data !== 'object') return { devices: [], ok: true };
     const devices = Object.entries(data).map(([devId, raw]) => {
       const d = raw as Record<string, unknown>;
-      const online = d['online'] === true || d['status'] === 'online' || d['connected'] === true;
-      const battery =
-        typeof d['battery'] === 'number' ? d['battery'] :
-        typeof d['batteryLevel'] === 'number' ? d['batteryLevel'] :
-        typeof d['bat'] === 'number' ? d['bat'] : undefined;
+
+      const online =
+        d['online'] === true || d['Status'] === 'online' || d['status'] === 'online' ||
+        d['connected'] === true || d['isOnline'] === true || d['Online'] === true ||
+        d['connection'] === 'online' || d['deviceStatus'] === 'online';
+
+      const str = (v: unknown) => v != null && String(v).trim() ? String(v).trim() : undefined;
+      const num = (v: unknown) => typeof v === 'number' ? v : (typeof v === 'string' && !isNaN(Number(v)) && v !== '') ? Number(v) : undefined;
+
+      const brand = str(d['Brand'] ?? d['brand']);
+      const model = str(d['Model'] ?? d['model'] ?? d['deviceModel'] ?? d['device'] ?? d['DeviceModel']);
+      const fullModel = brand && model ? `${brand} ${model}` : (model ?? brand);
+
+      const battery = num(d['Battery'] ?? d['battery'] ?? d['BatteryLevel'] ?? d['batteryLevel'] ?? d['bat'] ?? d['BatteryPercentage'] ?? d['batteryPercentage']);
+
+      const phone = str(
+        d['SIM'] ?? d['sim'] ?? d['PhoneNumber'] ?? d['phoneNumber'] ??
+        d['Phone'] ?? d['phone'] ?? d['number'] ?? d['Number'] ??
+        d['SimNumber'] ?? d['simNumber'] ?? d['mobile'] ?? d['Mobile']
+      );
+      const network = str(
+        d['Network'] ?? d['network'] ?? d['NetworkType'] ?? d['networkType'] ??
+        d['Operator'] ?? d['operator'] ?? d['simOperator'] ?? d['SimOperator'] ??
+        d['networkOperator'] ?? d['NetworkOperator'] ?? d['carrier'] ?? d['Carrier']
+      );
+      const android = str(
+        d['Version'] ?? d['version'] ?? d['AndroidVersion'] ?? d['androidVersion'] ??
+        d['android'] ?? d['Android'] ?? d['osVersion'] ?? d['OsVersion'] ?? d['sdkVersion']
+      );
+      const name = str(d['name'] ?? d['Name']) ?? fullModel ?? devId;
+
       return {
         id: `${source.id}_${devId}`,
         sourceId: source.id,
         sourceName: source.name,
-        name: String(d['name'] ?? d['model'] ?? d['device'] ?? devId),
-        model: d['model'] ? String(d['model']) : d['device'] ? String(d['device']) : undefined,
-        phone: d['phoneNumber'] ? String(d['phoneNumber']) : d['phone'] ? String(d['phone']) : d['number'] ? String(d['number']) : d['sim'] ? String(d['sim']) : undefined,
-        network: d['network'] ? String(d['network']) : d['networkType'] ? String(d['networkType']) : d['operator'] ? String(d['operator']) : undefined,
+        name,
+        model: fullModel,
+        phone,
+        network,
         battery,
-        android: d['androidVersion'] ? String(d['androidVersion']) : d['android'] ? String(d['android']) : d['osVersion'] ? String(d['osVersion']) : undefined,
+        android,
         online,
       };
     });
