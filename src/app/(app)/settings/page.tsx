@@ -1,440 +1,272 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Shield, Bell, Database, Key, Info, Lock, Unlock, Plus, Trash2, Loader2, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Save, Plus, Trash2, CheckCircle2, Database, Mail, CreditCard } from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
-import { useTheme } from '@/components/theme-provider';
-import { apiFetch } from '@/hooks/useApi';
 
-interface FirebaseProject {
+interface SmtpConfig {
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  fromName: string;
+  fromEmail: string;
+  enabled: boolean;
+}
+interface SimSlot {
   id: string;
   name: string;
-  projectId: string;
-  rtdbUrl?: string;
-  notes?: string;
-  createdAt: string;
+  simSlot: 0 | 1;
+  operator: string;
+  priority: number;
+  active: boolean;
+}
+
+const SMTP_DEFAULT: SmtpConfig = { host: '', port: '587', username: '', password: '', fromName: '', fromEmail: '', enabled: false };
+const SLOTS_DEFAULT: SimSlot[] = [
+  { id: '1', name: 'Primary SIM', simSlot: 0, operator: '', priority: 1, active: true },
+  { id: '2', name: 'Secondary SIM', simSlot: 1, operator: '', priority: 2, active: true },
+];
+
+function load<T>(key: string, fallback: T): T {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) as T : fallback; } catch { return fallback; }
+}
+function save(key: string, val: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* */ }
+}
+
+function Toast({ msg }: { msg: string }) {
+  return msg ? (
+    <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 bg-emerald-600 text-white px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium animate-fade-in">
+      <CheckCircle2 className="w-4 h-4" />
+      {msg}
+    </div>
+  ) : null;
 }
 
 export default function SettingsPage() {
-  const { user, appUser, idToken } = useAuth();
-  const { theme, setTheme } = useTheme();
-  const [webhookUrl] = useState(
-    typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/device-status` : ''
-  );
-  const [copied, setCopied] = useState(false);
+  const { user } = useAuth();
+  const [rtdbUrl, setRtdbUrl] = useState('');
+  const [smtp, setSmtp] = useState<SmtpConfig>(SMTP_DEFAULT);
+  const [slots, setSlots] = useState<SimSlot[]>(SLOTS_DEFAULT);
+  const [toast, setToast] = useState('');
 
-  const [unlocked, setUnlocked] = useState(false);
-  const [pwInput, setPwInput] = useState('');
-  const [pwError, setPwError] = useState('');
-  const [unlocking, setUnlocking] = useState(false);
+  useEffect(() => {
+    setRtdbUrl(localStorage.getItem('panel_rtdb_url') ?? '');
+    setSmtp(load('panel_smtp', SMTP_DEFAULT));
+    setSlots(load('panel_slots', SLOTS_DEFAULT));
+  }, []);
 
-  const [projects, setProjects] = useState<FirebaseProject[]>([]);
-  const [loadingProjects, setLoadingProjects] = useState(false);
-
-  const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', devicesPath: 'devices', notes: '' });
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [syncingId, setSyncingId] = useState<string | null>(null);
-  const [syncResult, setSyncResult] = useState<Record<string, string>>({});
-
-  function copyWebhook() {
-    navigator.clipboard.writeText(webhookUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(''), 2500);
   }
 
-  const loadProjects = useCallback(async (pw: string) => {
-    if (!idToken) return;
-    setLoadingProjects(true);
-    try {
-      const data = await apiFetch<FirebaseProject[]>('/api/settings/firebase-projects', idToken, {
-        headers: { 'x-settings-token': pw },
-      });
-      setProjects(data ?? []);
-    } finally {
-      setLoadingProjects(false);
-    }
-  }, [idToken]);
-
-  async function handleUnlock() {
-    setPwError('');
-    setUnlocking(true);
-    try {
-      const res = await fetch('/api/settings/unlock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pwInput }),
-      });
-      if (!res.ok) {
-        setPwError('Wrong password');
-        return;
-      }
-      setUnlocked(true);
-      await loadProjects(pwInput);
-    } finally {
-      setUnlocking(false);
-    }
+  function saveRtdb() {
+    const cleaned = rtdbUrl.trim().replace(/\/$/, '');
+    localStorage.setItem('panel_rtdb_url', cleaned);
+    setRtdbUrl(cleaned);
+    showToast('Firebase URL saved');
   }
 
-  async function handleAdd() {
-    if (!form.name || !form.projectId) { setSaveError('Name and Project ID are required'); return; }
-    setSaving(true); setSaveError('');
-    try {
-      const payload = {
-        ...form,
-        serviceAccountJson: form.serviceAccountJson.trim() || null,
-      };
-      await apiFetch('/api/settings/firebase-projects', idToken!, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-settings-token': pwInput },
-        body: JSON.stringify(payload),
-      });
-      setForm({ name: '', projectId: '', serviceAccountJson: '', rtdbUrl: '', devicesPath: 'devices', notes: '' });
-      setAddOpen(false);
-      await loadProjects(pwInput);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setSaving(false);
-    }
+  function saveSmtp() {
+    save('panel_smtp', smtp);
+    showToast('SMTP settings saved');
   }
 
-  async function handleSync(projectDocId: string) {
-    setSyncingId(projectDocId);
-    setSyncResult((r) => ({ ...r, [projectDocId]: '' }));
-    try {
-      const data = await apiFetch<{ synced: number; path: string; message?: string }>(
-        '/api/settings/firebase-projects/sync',
-        idToken!,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-settings-token': pwInput },
-          body: JSON.stringify({ projectDocId }),
-        }
-      );
-      setSyncResult((r) => ({ ...r, [projectDocId]: `✓ ${data?.synced ?? 0} devices synced` }));
-    } catch (e) {
-      setSyncResult((r) => ({ ...r, [projectDocId]: `✗ ${e instanceof Error ? e.message : 'Sync failed'}` }));
-    } finally {
-      setSyncingId(null);
-    }
+  function addSlot() {
+    const newSlot: SimSlot = {
+      id: Date.now().toString(),
+      name: `SIM Slot ${slots.length + 1}`,
+      simSlot: slots.length % 2 === 0 ? 0 : 1,
+      operator: '',
+      priority: slots.length + 1,
+      active: true,
+    };
+    const updated = [...slots, newSlot];
+    setSlots(updated);
+    save('panel_slots', updated);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('Remove this project?')) return;
-    await apiFetch('/api/settings/firebase-projects', idToken!, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json', 'x-settings-token': pwInput },
-      body: JSON.stringify({ id }),
-    });
-    await loadProjects(pwInput);
+  function updateSlot(id: string, patch: Partial<SimSlot>) {
+    const updated = slots.map(s => s.id === id ? { ...s, ...patch } : s);
+    setSlots(updated);
+    save('panel_slots', updated);
+  }
+
+  function deleteSlot(id: string) {
+    const updated = slots.filter(s => s.id !== id);
+    setSlots(updated);
+    save('panel_slots', updated);
   }
 
   return (
     <div className="max-w-2xl space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Settings</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Account preferences and system configuration
-        </p>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Panel configuration</p>
       </div>
 
-      <div className="card p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Shield className="w-5 h-5 text-brand-500" />
-          <h2 className="text-base font-semibold text-slate-900 dark:text-white">Account</h2>
-        </div>
-        <div className="space-y-3">
-          {[
-            { label: 'Email', value: user?.email ?? '—' },
-            { label: 'Role', value: appUser?.role ?? '—' },
-            { label: 'UID', value: user?.uid ?? '—' },
-          ].map(({ label, value }) => (
-            <div key={label} className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-800">
-              <span className="text-sm text-slate-500 dark:text-slate-400">{label}</span>
-              <span className="text-sm font-medium text-slate-900 dark:text-white font-mono">
-                {value}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="card p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Bell className="w-5 h-5 text-brand-500" />
-          <h2 className="text-base font-semibold text-slate-900 dark:text-white">Appearance</h2>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-            Theme
-          </label>
-          <div className="flex gap-2">
-            {(['light', 'dark', 'system'] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTheme(t)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-colors ${
-                  theme === t
-                    ? 'bg-brand-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
+      {/* Firebase RTDB */}
+      <div className="card p-5 space-y-4">
+        <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-700/50">
+          <div className="w-8 h-8 rounded-lg bg-orange-50 dark:bg-orange-950 flex items-center justify-center">
+            <Database className="w-4 h-4 text-orange-500" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-900 dark:text-white">Firebase RTDB</p>
+            <p className="text-xs text-slate-400">Realtime Database URL for device data</p>
           </div>
         </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">Database URL</label>
+          <input
+            type="url"
+            value={rtdbUrl}
+            onChange={e => setRtdbUrl(e.target.value)}
+            placeholder="https://your-project-default-rtdb.firebaseio.com"
+            className="input w-full font-mono text-sm"
+          />
+          <p className="text-[11px] text-slate-400">Firebase Console → Project → Realtime Database → Copy URL</p>
+        </div>
+        <button onClick={saveRtdb} className="btn-primary gap-2 text-sm">
+          <Save className="w-4 h-4" /> Save URL
+        </button>
       </div>
 
-      <div className="card p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Database className="w-5 h-5 text-brand-500" />
-          <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-            Device Callback URL
-          </h2>
+      {/* SMTP */}
+      <div className="card p-5 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-700/50">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950 flex items-center justify-center">
+              <Mail className="w-4 h-4 text-blue-500" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">SMTP Server</p>
+              <p className="text-xs text-slate-400">Email delivery configuration</p>
+            </div>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-xs text-slate-500">Enable</span>
+            <div
+              onClick={() => setSmtp(s => ({ ...s, enabled: !s.enabled }))}
+              className={`w-9 h-5 rounded-full transition-colors cursor-pointer ${smtp.enabled ? 'bg-brand-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+            >
+              <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform mt-0.5 ${smtp.enabled ? 'translate-x-4.5 ml-0.5' : 'translate-x-0.5'}`} />
+            </div>
+          </label>
         </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Configure your Android SMS app to POST delivery receipts and heartbeats to this endpoint.
-        </p>
-        <div className="flex gap-2">
-          <input readOnly value={webhookUrl} className="input flex-1 font-mono text-xs" />
-          <button onClick={copyWebhook} className="btn-secondary whitespace-nowrap">
-            {copied ? 'Copied!' : 'Copy'}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Host</label>
+            <input type="text" value={smtp.host} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" className="input w-full text-sm" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Port</label>
+            <input type="text" value={smtp.port} onChange={e => setSmtp(s => ({ ...s, port: e.target.value }))} placeholder="587" className="input w-full text-sm" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Username</label>
+            <input type="text" value={smtp.username} onChange={e => setSmtp(s => ({ ...s, username: e.target.value }))} placeholder="user@example.com" className="input w-full text-sm" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Password</label>
+            <input type="password" value={smtp.password} onChange={e => setSmtp(s => ({ ...s, password: e.target.value }))} placeholder="••••••••" className="input w-full text-sm" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">From Name</label>
+            <input type="text" value={smtp.fromName} onChange={e => setSmtp(s => ({ ...s, fromName: e.target.value }))} placeholder="Shadow C2" className="input w-full text-sm" />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">From Email</label>
+            <input type="email" value={smtp.fromEmail} onChange={e => setSmtp(s => ({ ...s, fromEmail: e.target.value }))} placeholder="noreply@example.com" className="input w-full text-sm" />
+          </div>
+        </div>
+        <button onClick={saveSmtp} className="btn-primary gap-2 text-sm">
+          <Save className="w-4 h-4" /> Save SMTP
+        </button>
+      </div>
+
+      {/* SIM Slots */}
+      <div className="card p-5 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-700/50">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-950 flex items-center justify-center">
+              <CreditCard className="w-4 h-4 text-violet-500" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">SIM Slots</p>
+              <p className="text-xs text-slate-400">Manage device SIM slot routing</p>
+            </div>
+          </div>
+          <button onClick={addSlot} className="btn-secondary gap-1.5 text-xs py-1.5 px-3">
+            <Plus className="w-3.5 h-3.5" /> Add Slot
           </button>
         </div>
-        <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg flex items-start gap-2">
-          <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
-          <div className="text-xs text-blue-700 dark:text-blue-400 space-y-1">
-            <p>Expected POST body fields:</p>
-            <code className="block font-mono">
-              {'{ "deviceId": "...", "type": "DELIVERY_RECEIPT" | "HEARTBEAT", "messageId": "...", "delivered": true/false }'}
-            </code>
-          </div>
-        </div>
-      </div>
 
-      <div className="card p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Key className="w-5 h-5 text-brand-500" />
-          <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-            Firebase Configuration
-          </h2>
-        </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Firebase credentials are loaded from environment variables on the server.
-          See <code className="text-xs bg-slate-100 dark:bg-slate-700 px-1 rounded">.env.example</code> for
-          the required variables.
-        </p>
         <div className="space-y-2">
-          {[
-            'FIREBASE_SERVICE_ACCOUNT_JSON',
-            'NEXT_PUBLIC_FIREBASE_API_KEY',
-            'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
-            'REDIS_HOST',
-          ].map((key) => (
-            <div key={key} className="flex items-center gap-2 text-xs">
-              <div className="w-2 h-2 rounded-full bg-slate-300" />
-              <code className="font-mono text-slate-600 dark:text-slate-400">{key}</code>
+          {slots.map(slot => (
+            <div key={slot.id} className="flex items-center gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50">
+              <div className="flex-1 grid grid-cols-3 gap-2">
+                <input
+                  type="text"
+                  value={slot.name}
+                  onChange={e => updateSlot(slot.id, { name: e.target.value })}
+                  className="input text-xs py-1.5"
+                  placeholder="Slot name"
+                />
+                <select
+                  value={slot.simSlot}
+                  onChange={e => updateSlot(slot.id, { simSlot: Number(e.target.value) as 0 | 1 })}
+                  className="input text-xs py-1.5"
+                >
+                  <option value={0}>SIM 1</option>
+                  <option value={1}>SIM 2</option>
+                </select>
+                <input
+                  type="text"
+                  value={slot.operator}
+                  onChange={e => updateSlot(slot.id, { operator: e.target.value })}
+                  className="input text-xs py-1.5"
+                  placeholder="Operator"
+                />
+              </div>
+              <label className="flex items-center gap-1.5 flex-shrink-0 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={slot.active}
+                  onChange={e => updateSlot(slot.id, { active: e.target.checked })}
+                  className="w-3.5 h-3.5 accent-brand-600"
+                />
+                <span className="text-xs text-slate-500">Active</span>
+              </label>
+              <button onClick={() => deleteSlot(slot.id)} className="p-1 text-slate-400 hover:text-red-500 transition-colors flex-shrink-0">
+                <Trash2 className="w-4 h-4" />
+              </button>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="card p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {unlocked
-              ? <Unlock className="w-5 h-5 text-emerald-500" />
-              : <Lock className="w-5 h-5 text-brand-500" />}
-            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-              Firebase Projects
-            </h2>
-          </div>
-          {unlocked && (
-            <button
-              onClick={() => { setAddOpen(true); setSaveError(''); }}
-              className="btn-primary flex items-center gap-1 text-sm py-1.5 px-3"
-            >
-              <Plus className="w-4 h-4" /> Add Project
-            </button>
-          )}
+      {/* Account */}
+      <div className="card p-5 space-y-3">
+        <div className="pb-3 border-b border-slate-100 dark:border-slate-700/50">
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">Account</p>
         </div>
-
-        {!unlocked ? (
-          <div className="space-y-3">
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              Enter your settings password to manage Firebase projects.
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={pwInput}
-                onChange={(e) => setPwInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
-                placeholder="Password"
-                className="input flex-1"
-              />
-              <button
-                onClick={handleUnlock}
-                disabled={unlocking || !pwInput}
-                className="btn-primary whitespace-nowrap"
-              >
-                {unlocking ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Unlock'}
-              </button>
-            </div>
-            {pwError && <p className="text-sm text-red-500">{pwError}</p>}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Email</label>
+            <input type="text" value={user?.email ?? ''} readOnly className="input w-full text-sm bg-slate-50 dark:bg-slate-800 cursor-default" />
           </div>
-        ) : (
-          <>
-            {addOpen && (
-              <div className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-3 bg-slate-50 dark:bg-slate-800/50">
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">New Firebase Project</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Display Name *
-                    </label>
-                    <input
-                      className="input text-sm"
-                      placeholder="My Project"
-                      value={form.name}
-                      onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                      Firebase Project ID *
-                    </label>
-                    <input
-                      className="input text-sm font-mono"
-                      placeholder="my-project-12345"
-                      value={form.projectId}
-                      onChange={(e) => setForm((f) => ({ ...f, projectId: e.target.value }))}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Realtime Database URL *
-                  </label>
-                  <input
-                    className="input text-sm font-mono"
-                    placeholder="https://my-project-default-rtdb.firebaseio.com"
-                    value={form.rtdbUrl}
-                    onChange={(e) => setForm((f) => ({ ...f, rtdbUrl: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Devices path in RTDB <span className="text-slate-400">(default: devices)</span>
-                  </label>
-                  <input
-                    className="input text-sm font-mono"
-                    placeholder="devices"
-                    value={form.devicesPath}
-                    onChange={(e) => setForm((f) => ({ ...f, devicesPath: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Service Account JSON <span className="text-slate-400">(optional)</span>
-                  </label>
-                  <textarea
-                    className="input text-xs font-mono h-16 resize-none"
-                    placeholder="Leave empty if RTDB rules = true"
-                    value={form.serviceAccountJson}
-                    onChange={(e) => setForm((f) => ({ ...f, serviceAccountJson: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Notes (optional)
-                  </label>
-                  <input
-                    className="input text-sm"
-                    placeholder="e.g. Mumbai region, 50 devices"
-                    value={form.notes}
-                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                  />
-                </div>
-                {saveError && <p className="text-xs text-red-500">{saveError}</p>}
-                <div className="flex gap-2 justify-end">
-                  <button onClick={() => setAddOpen(false)} className="btn-secondary text-sm py-1.5 px-3">
-                    Cancel
-                  </button>
-                  <button onClick={handleAdd} disabled={saving} className="btn-primary text-sm py-1.5 px-3">
-                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {loadingProjects ? (
-              <div className="flex justify-center py-6">
-                <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
-              </div>
-            ) : projects.length === 0 ? (
-              <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">
-                No projects added yet. Click &quot;Add Project&quot; to start.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {projects.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-start justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
-                  >
-                    <div className="space-y-0.5 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{p.name}</p>
-                        {(p as FirebaseProject & { serviceAccountJson?: string }).serviceAccountJson && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300 flex-shrink-0">FCM ready</span>
-                        )}
-                      </div>
-                      <p className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate">{p.projectId}</p>
-                      {p.rtdbUrl && (
-                        <p className="text-xs font-mono text-slate-400 dark:text-slate-500 truncate">{p.rtdbUrl}</p>
-                      )}
-                      {p.notes && (
-                        <p className="text-xs text-slate-400 dark:text-slate-500">{p.notes}</p>
-                      )}
-                    </div>
-                    <div className="ml-3 flex-shrink-0 flex items-center gap-2">
-                      {p.rtdbUrl && (
-                        <div className="flex flex-col items-end gap-0.5">
-                          <button
-                            onClick={() => handleSync(p.id)}
-                            disabled={syncingId === p.id}
-                            title="Sync devices from RTDB"
-                            className="text-slate-400 hover:text-brand-500 transition-colors"
-                          >
-                            {syncingId === p.id
-                              ? <Loader2 className="w-4 h-4 animate-spin" />
-                              : <RefreshCw className="w-4 h-4" />}
-                          </button>
-                          {syncResult[p.id] && (
-                            <span className={`text-xs whitespace-nowrap ${syncResult[p.id].startsWith('✓') ? 'text-emerald-500' : 'text-red-500'}`}>
-                              {syncResult[p.id]}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <button
-                        onClick={() => handleDelete(p.id)}
-                        className="text-slate-400 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">UID</label>
+            <input type="text" value={user?.uid ?? ''} readOnly className="input w-full text-sm font-mono text-xs bg-slate-50 dark:bg-slate-800 cursor-default" />
+          </div>
+        </div>
       </div>
+
+      <Toast msg={toast} />
     </div>
   );
 }

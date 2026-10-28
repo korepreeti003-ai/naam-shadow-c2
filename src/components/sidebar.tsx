@@ -5,8 +5,6 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   Smartphone,
-  Users,
-  Send,
   Settings,
   LogOut,
   Radio,
@@ -25,8 +23,6 @@ import { cn } from '@/lib/utils';
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/devices', label: 'Devices', icon: Smartphone },
-  { href: '/contacts', label: 'Contacts', icon: Users },
-  { href: '/campaigns', label: 'Campaigns', icon: Send },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -56,7 +52,6 @@ export function Sidebar() {
         collapsed ? 'w-16' : 'w-64'
       )}
     >
-      {/* Logo */}
       <div className="flex items-center gap-3 px-4 h-16 border-b border-slate-200 dark:border-slate-800">
         <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
           <Radio className="w-4 h-4 text-white" />
@@ -79,7 +74,6 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
           const active = pathname.startsWith(href);
@@ -109,13 +103,10 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Bottom actions */}
       <div className="px-2 py-4 border-t border-slate-200 dark:border-slate-800 space-y-0.5">
         <button
           onClick={cycleTheme}
-          className={cn(
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors'
-          )}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           title={collapsed ? 'Toggle theme' : undefined}
         >
           <ThemeIcon className="w-5 h-5 flex-shrink-0" />
@@ -140,7 +131,7 @@ export function Sidebar() {
                   {appUser?.displayName ?? user.email}
                 </p>
                 <p className="text-xs text-slate-500 dark:text-slate-400 capitalize">
-                  {appUser?.role ?? 'viewer'}
+                  {appUser?.role ?? 'panel'}
                 </p>
               </div>
             )}
