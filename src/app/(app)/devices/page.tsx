@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Search, RefreshCw, Wifi, WifiOff, Database, Plus, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { Search, RefreshCw, Wifi, WifiOff, Database, Plus, X, Loader2, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
 
 interface RtdbSource {
   id: string;
@@ -13,13 +13,100 @@ interface RtdbDevice {
   id: string;
   sourceId: string;
   sourceName: string;
-  name: string;
-  model?: string;
-  phone?: string;
-  network?: string;
-  battery?: number;
-  android?: string;
+  displayName: string;
   online: boolean;
+  rawFields: Record<string, string | number | boolean>;
+}
+
+// Known field name aliases → canonical key
+const FIELD_MAP: Record<string, string> = {
+  // model / device name
+  model: 'model', Model: 'model', deviceModel: 'model', DeviceModel: 'model',
+  device: 'model', Device: 'model', phoneModel: 'model',
+  // brand
+  brand: 'brand', Brand: 'brand',
+  // android version
+  version: 'android', Version: 'android', androidVersion: 'android',
+  AndroidVersion: 'android', android: 'android', Android: 'android',
+  osVersion: 'android', OsVersion: 'android', sdkVersion: 'android',
+  // battery
+  battery: 'battery', Battery: 'battery', batteryLevel: 'battery',
+  BatteryLevel: 'battery', bat: 'battery', batteryPercentage: 'battery',
+  BatteryPercentage: 'battery', BatteryStatus: 'battery',
+  // phone number
+  phoneNumber: 'phone', PhoneNumber: 'phone', phone: 'phone', Phone: 'phone',
+  number: 'phone', Number: 'phone', sim: 'phone', SIM: 'phone',
+  simNumber: 'phone', SimNumber: 'phone', mobile: 'phone', Mobile: 'phone',
+  simNo: 'phone', SimNo: 'phone', contactNumber: 'phone',
+  // network
+  network: 'network', Network: 'network', networkType: 'network',
+  NetworkType: 'network', operator: 'network', Operator: 'network',
+  simOperator: 'network', SimOperator: 'network', networkOperator: 'network',
+  NetworkOperator: 'network', carrier: 'network', Carrier: 'network',
+  // name
+  name: 'name', Name: 'name', deviceName: 'name', DeviceName: 'name',
+};
+
+const SKIP_FIELDS = new Set([
+  'online', 'Online', 'status', 'Status', 'connected', 'Connected',
+  'isOnline', 'connection', 'deviceStatus', 'lastSeen', 'LastSeen',
+  'updatedAt', 'createdAt', 'fcmToken', 'FcmToken', 'token', 'Token',
+  'registrationToken', 'RegistrationToken', 'id', 'Id', 'uid', 'Uid',
+]);
+
+function parseDevice(source: RtdbSource, devId: string, raw: Record<string, unknown>): RtdbDevice {
+  const online =
+    raw['online'] === true || raw['Online'] === true || raw['isOnline'] === true ||
+    String(raw['status'] ?? raw['Status'] ?? raw['connection'] ?? raw['deviceStatus'] ?? '').toLowerCase() === 'online' ||
+    raw['connected'] === true;
+
+  const canonical: Record<string, string | number | boolean> = {};
+  const extra: Record<string, string | number | boolean> = {};
+
+  for (const [k, v] of Object.entries(raw)) {
+    if (v == null || v === '' || v === false || SKIP_FIELDS.has(k)) continue;
+    if (typeof v === 'object') continue; // skip nested objects
+
+    const mapped = FIELD_MAP[k];
+    const scalar = typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : String(v);
+
+    if (mapped) {
+      // prefer first match
+      if (!(mapped in canonical)) canonical[mapped] = scalar;
+    } else {
+      extra[k] = scalar;
+    }
+  }
+
+  const brand = canonical['brand'] ? String(canonical['brand']) : '';
+  const model = canonical['model'] ? String(canonical['model']) : '';
+  const fullModel = brand && model ? `${brand} ${model}` : model || brand || '';
+
+  const displayName =
+    String(canonical['name'] ?? '').trim() ||
+    fullModel ||
+    devId;
+
+  // Build rendered fields: canonical first, then extra
+  const renderFields: Record<string, string | number | boolean> = {};
+  if (fullModel) renderFields['MODEL'] = fullModel;
+  if (canonical['android']) renderFields['ANDROID'] = canonical['android'];
+  if (canonical['battery'] != null) renderFields['BATTERY'] = canonical['battery'];
+  if (canonical['phone']) renderFields['NUMBER'] = canonical['phone'];
+  if (canonical['network']) renderFields['NETWORK'] = canonical['network'];
+  // append any extra fields we don't recognise
+  for (const [k, v] of Object.entries(extra)) {
+    renderFields[k] = v;
+  }
+
+  return {
+    id: `${source.id}_${devId}`,
+    sourceId: source.id,
+    sourceName: source.name,
+    displayName,
+    online,
+    rawFields: renderFields,
+  };
 }
 
 function loadSources(): RtdbSource[] {
@@ -44,54 +131,77 @@ async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDe
     if (!res.ok) return { devices: [], ok: false };
     const data = await res.json() as Record<string, unknown> | null;
     if (!data || typeof data !== 'object') return { devices: [], ok: true };
-    const devices = Object.entries(data).map(([devId, raw]) => {
-      const d = raw as Record<string, unknown>;
-
-      const online =
-        d['online'] === true || d['Status'] === 'online' || d['status'] === 'online' ||
-        d['connected'] === true || d['isOnline'] === true || d['Online'] === true ||
-        d['connection'] === 'online' || d['deviceStatus'] === 'online';
-
-      const str = (v: unknown) => v != null && String(v).trim() ? String(v).trim() : undefined;
-      const num = (v: unknown) => typeof v === 'number' ? v : (typeof v === 'string' && !isNaN(Number(v)) && v !== '') ? Number(v) : undefined;
-
-      const brand = str(d['Brand'] ?? d['brand']);
-      const model = str(d['Model'] ?? d['model'] ?? d['deviceModel'] ?? d['device'] ?? d['DeviceModel']);
-      const fullModel = brand && model ? `${brand} ${model}` : (model ?? brand);
-
-      const battery = num(d['Battery'] ?? d['battery'] ?? d['BatteryLevel'] ?? d['batteryLevel'] ?? d['bat'] ?? d['BatteryPercentage'] ?? d['batteryPercentage']);
-
-      const phone = str(
-        d['SIM'] ?? d['sim'] ?? d['PhoneNumber'] ?? d['phoneNumber'] ??
-        d['Phone'] ?? d['phone'] ?? d['number'] ?? d['Number'] ??
-        d['SimNumber'] ?? d['simNumber'] ?? d['mobile'] ?? d['Mobile']
-      );
-      const network = str(
-        d['Network'] ?? d['network'] ?? d['NetworkType'] ?? d['networkType'] ??
-        d['Operator'] ?? d['operator'] ?? d['simOperator'] ?? d['SimOperator'] ??
-        d['networkOperator'] ?? d['NetworkOperator'] ?? d['carrier'] ?? d['Carrier']
-      );
-      const android = str(
-        d['Version'] ?? d['version'] ?? d['AndroidVersion'] ?? d['androidVersion'] ??
-        d['android'] ?? d['Android'] ?? d['osVersion'] ?? d['OsVersion'] ?? d['sdkVersion']
-      );
-      const name = str(d['name'] ?? d['Name']) ?? fullModel ?? devId;
-
-      return {
-        id: `${source.id}_${devId}`,
-        sourceId: source.id,
-        sourceName: source.name,
-        name,
-        model: fullModel,
-        phone,
-        network,
-        battery,
-        android,
-        online,
-      };
-    });
+    const devices = Object.entries(data).map(([devId, raw]) =>
+      parseDevice(source, devId, raw as Record<string, unknown>)
+    );
     return { devices, ok: true };
   } catch { return { devices: [], ok: false }; }
+}
+
+function BatteryBar({ val }: { val: number }) {
+  const pct = Math.min(100, Math.max(0, val));
+  const color = pct > 30 ? 'bg-emerald-500' : pct > 10 ? 'bg-amber-500' : 'bg-red-500';
+  return (
+    <span className="flex items-center gap-1">
+      <span className="inline-flex w-8 h-2.5 rounded-sm border border-slate-300 dark:border-slate-600 overflow-hidden">
+        <span className={`${color} h-full`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className={`font-medium text-xs ${ pct > 30 ? 'text-emerald-500' : pct > 10 ? 'text-amber-500' : 'text-red-500'}`}>{pct}%</span>
+    </span>
+  );
+}
+
+function DeviceCard({ device }: { device: RtdbDevice }) {
+  const [open, setOpen] = useState(false);
+  const batt = device.rawFields['BATTERY'];
+
+  return (
+    <div className={`card p-3 space-y-2 border ${
+      device.online ? 'border-emerald-200 dark:border-emerald-800' : 'border-slate-200 dark:border-slate-700'
+    }`}>
+      <div className="flex items-start justify-between gap-1">
+        <button
+          className="text-sm font-semibold text-slate-900 dark:text-white leading-tight text-left line-clamp-1 hover:opacity-70"
+          onClick={() => setOpen((p) => !p)}
+          title="Toggle raw fields"
+        >
+          {device.displayName}
+        </button>
+        {device.online ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+        <span className={`text-xs font-medium ${device.online ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+          {device.online ? 'Online' : 'Offline'}
+        </span>
+        <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
+        <span className="text-xs text-slate-400 truncate">{device.sourceName}</span>
+      </div>
+
+      {Object.keys(device.rawFields).length > 0 && (
+        <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-700/50">
+          {Object.entries(device.rawFields).map(([k, v]) => (
+            <div key={k} className="flex justify-between items-start text-xs gap-1">
+              <span className="text-slate-400 flex-shrink-0 uppercase text-[10px]">{k}</span>
+              {k === 'BATTERY' && typeof v === 'number' ? (
+                <BatteryBar val={v} />
+              ) : (
+                <span className="text-slate-600 dark:text-slate-300 font-mono text-right break-all max-w-[130px]">{String(v)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && (
+        <details open className="text-xs">
+          <summary className="cursor-pointer text-slate-400 select-none">raw JSON</summary>
+          <pre className="mt-1 p-1.5 bg-slate-50 dark:bg-slate-800 rounded text-[9px] overflow-auto max-h-40 text-slate-500 dark:text-slate-400">{JSON.stringify(device.rawFields, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
 }
 
 export default function DevicesPage() {
@@ -150,7 +260,6 @@ export default function DevicesPage() {
 
     let added = 0;
     let skipped = 0;
-
     const newSources: RtdbSource[] = [...existing];
 
     await Promise.all(
@@ -161,12 +270,8 @@ export default function DevicesPage() {
           url,
         };
         const result = await fetchSourceDevices(src);
-        if (result.ok) {
-          newSources.push(src);
-          added++;
-        } else {
-          skipped++;
-        }
+        if (result.ok) { newSources.push(src); added++; }
+        else skipped++;
       })
     );
 
@@ -186,10 +291,11 @@ export default function DevicesPage() {
   }
 
   const filtered = devices.filter((d) => {
+    const q = search.toLowerCase();
     const matchSearch =
-      d.name.toLowerCase().includes(search.toLowerCase()) ||
-      (d.phone ?? '').includes(search) ||
-      (d.model ?? '').toLowerCase().includes(search.toLowerCase());
+      d.displayName.toLowerCase().includes(q) ||
+      String(d.rawFields['NUMBER'] ?? '').includes(search) ||
+      String(d.rawFields['MODEL'] ?? '').toLowerCase().includes(q);
     const matchFilter =
       filter === 'all' ||
       (filter === 'online' && d.online) ||
@@ -243,9 +349,7 @@ export default function DevicesPage() {
             }`}>
               {deadIds.has(s.id) ? <AlertCircle className="w-3 h-3" /> : <Database className="w-3 h-3" />}
               <span className="font-medium">{s.name}</span>
-              <button onClick={() => handleRemoveSource(s.id)} className="hover:text-red-500 ml-0.5">
-                <X className="w-3 h-3" />
-              </button>
+              <button onClick={() => handleRemoveSource(s.id)} className="hover:text-red-500 ml-0.5"><X className="w-3 h-3" /></button>
             </div>
           ))}
         </div>
@@ -263,7 +367,7 @@ export default function DevicesPage() {
             </label>
             <textarea
               className="input text-sm font-mono h-32 resize-none w-full"
-              placeholder={"https://project1-default-rtdb.firebaseio.com\nhttps://project2-default-rtdb.firebaseio.com\nhttps://project3-default-rtdb.firebaseio.com"}
+              placeholder={"https://project1-default-rtdb.firebaseio.com\nhttps://project2-default-rtdb.firebaseio.com"}
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
               autoFocus
@@ -308,9 +412,7 @@ export default function DevicesPage() {
           <Database className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto" />
           <div>
             <p className="text-slate-700 dark:text-slate-300 font-medium">Koi RTDB URL nahi add hua</p>
-            <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">
-              &quot;Add URL&quot; dabao aur apna Firebase RTDB URL paste karo
-            </p>
+            <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">&quot;Add URL&quot; dabao aur apna Firebase RTDB URL paste karo</p>
           </div>
           <button onClick={() => { setAddOpen(true); setAddResult(''); }} className="btn-primary mx-auto flex items-center gap-1.5">
             <Plus className="w-4 h-4" /> Add Firebase URL
@@ -333,52 +435,7 @@ export default function DevicesPage() {
       {filtered.length > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filtered.map((device) => (
-            <div key={device.id} className={`card p-3 space-y-2 border ${device.online ? 'border-emerald-200 dark:border-emerald-800' : 'border-slate-200 dark:border-slate-700'}`}>
-              <div className="flex items-start justify-between gap-1">
-                <p className="text-sm font-semibold text-slate-900 dark:text-white leading-tight line-clamp-1">{device.name}</p>
-                {device.online ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                <span className={`text-xs font-medium ${device.online ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
-                  {device.online ? 'Online' : 'Offline'}
-                </span>
-                <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
-                <span className="text-xs text-slate-400 truncate">{device.sourceName}</span>
-              </div>
-              <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-700/50">
-                {device.model && (
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-400">MODEL</span>
-                    <span className="text-slate-600 dark:text-slate-300 font-mono text-right line-clamp-1 max-w-[110px]">{device.model}</span>
-                  </div>
-                )}
-                {device.android && (
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-400">ANDROID</span>
-                    <span className="text-slate-600 dark:text-slate-300">v{device.android}</span>
-                  </div>
-                )}
-                {device.battery != null && (
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-400">BATTERY</span>
-                    <span className={`font-medium ${device.battery > 30 ? 'text-emerald-500' : device.battery > 10 ? 'text-amber-500' : 'text-red-500'}`}>{device.battery}%</span>
-                  </div>
-                )}
-                {device.phone && (
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-400">NUMBER</span>
-                    <span className="text-slate-600 dark:text-slate-300 font-mono">{device.phone}</span>
-                  </div>
-                )}
-                {device.network && (
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-400">NETWORK</span>
-                    <span className="text-slate-600 dark:text-slate-300">{device.network}</span>
-                  </div>
-                )}
-              </div>
-            </div>
+            <DeviceCard key={device.id} device={device} />
           ))}
         </div>
       )}
