@@ -107,11 +107,7 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   return { id: `${source.id}_${devId}`, sourceId: source.id, sourceName: source.name, displayName, online, fields, battery: batteryVal };
 }
 
-const RTDB_PATHS = ['devices','Devices','Users','users','Phones','phones','registered','clients','data','device_list','all_devices'];
-
-function hasRealData(devs: RtdbDevice[]): boolean {
-  return devs.some(d => d.fields.length >= 1);
-}
+const DEVICE_PATHS = ['devices','Devices','Users','users','Phones','phones','registered','clients','data','device_list','all_devices'];
 
 async function tryFetch(url: string): Promise<Record<string, unknown> | null> {
   try {
@@ -123,47 +119,96 @@ async function tryFetch(url: string): Promise<Record<string, unknown> | null> {
   } catch { return null; }
 }
 
+// SMS/message record detection — these are campaign queue entries, not device records
+function isSmsRecord(raw: Record<string, unknown>): boolean {
+  return ('messageType' in raw || 'isSended' in raw || 'isSent' in raw) &&
+    ('channel' in raw || 'body' in raw || 'to' in raw);
+}
+
+function hasRealDeviceData(devs: RtdbDevice[]): boolean {
+  return devs.some(d => d.fields.length >= 1);
+}
+
+// Build unique device list from SMS queue records
+function devicesFromSmsRecords(source: RtdbSource, data: Record<string, unknown>): RtdbDevice[] {
+  const byDeviceId = new Map<string, { phone: string; online: boolean }>();
+  for (const raw of Object.values(data)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const r = raw as Record<string, unknown>;
+    const devId = String(r['targetDeviceId'] ?? r['deviceId'] ?? r['device_id'] ?? '');
+    if (!devId) continue;
+    const phone = String(r['NUMBER'] ?? r['num'] ?? r['number'] ?? r['Number'] ?? '');
+    const prev = byDeviceId.get(devId);
+    if (!prev) byDeviceId.set(devId, { phone, online: isOnline(r) });
+  }
+  return Array.from(byDeviceId.entries()).map(([devId, info]) => ({
+    id: `${source.id}_${devId}`,
+    sourceId: source.id,
+    sourceName: source.name,
+    displayName: devId.slice(0, 16),
+    online: info.online,
+    fields: info.phone ? [{ label: 'NUMBER', value: info.phone }] : [],
+    battery: undefined,
+  }));
+}
+
 async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
   const base = source.url.replace(/\/$/, '');
   try {
-    // Try every named path — pick the first one that has real field data
-    for (const path of RTDB_PATHS) {
+    // 1. Try named device paths first
+    for (const path of DEVICE_PATHS) {
       const data = await tryFetch(`${base}/${path}.json`);
       if (!data || Object.keys(data).length === 0) continue;
-      const devs = Object.entries(data).map(([id, raw]) =>
+      const entries = Object.entries(data);
+      // Check if these are SMS records — skip if so
+      const sample = entries[0]?.[1];
+      if (sample && typeof sample === 'object' && !Array.isArray(sample) && isSmsRecord(sample as Record<string, unknown>)) continue;
+      const devs = entries.map(([id, raw]) =>
         parseDevice(source, id, typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {})
       );
-      if (hasRealData(devs)) return { devices: devs, ok: true };
+      if (hasRealDeviceData(devs)) return { devices: devs, ok: true };
     }
 
-    // Try root level — some panels store /{deviceId} directly at root
+    // 2. Try root shallow to find device-like keys
     const root = await tryFetch(`${base}/.json?shallow=true`);
     if (root) {
-      const deviceKeys = Object.keys(root).filter(k =>
+      const rootKeys = Object.keys(root);
+      // Check if root keys are named paths (not device IDs) — if so, skip
+      const deviceLikeKeys = rootKeys.filter(k =>
         /^[0-9a-f]{8,}$/i.test(k) || /^[A-Za-z0-9_-]{15,}$/.test(k)
       );
-      if (deviceKeys.length > 0) {
-        const samples = await Promise.all(deviceKeys.slice(0, 3).map(k => tryFetch(`${base}/${k}.json`)));
-        const hasDeviceData = samples.some(s => s && Object.keys(s).length > 2);
-        if (hasDeviceData) {
+      if (deviceLikeKeys.length > 0) {
+        const samples = await Promise.all(deviceLikeKeys.slice(0, 3).map(k => tryFetch(`${base}/${k}.json`)));
+        // If samples look like SMS records, extract devices from them differently
+        const firstSample = samples.find(Boolean);
+        if (firstSample && isSmsRecord(firstSample)) {
+          // These are SMS records keyed by something — get full root and extract devices
           const all = await tryFetch(`${base}/.json`);
           if (all) {
-            const devs = deviceKeys
+            const devs = devicesFromSmsRecords(source, all);
+            if (devs.length > 0) return { devices: devs, ok: true };
+          }
+        } else if (samples.some(s => s && Object.keys(s).length > 2)) {
+          const all = await tryFetch(`${base}/.json`);
+          if (all) {
+            const devs = deviceLikeKeys
               .filter(k => all[k] && typeof all[k] === 'object')
               .map(k => parseDevice(source, k, all[k] as Record<string, unknown>));
-            if (hasRealData(devs)) return { devices: devs, ok: true };
+            if (hasRealDeviceData(devs)) return { devices: devs, ok: true };
           }
         }
       }
     }
 
-    // Fallback: return /devices even with no field data (so count shows)
-    const fallback = await tryFetch(`${base}/devices.json`);
-    if (fallback && Object.keys(fallback).length > 0) {
-      const devs = Object.entries(fallback).map(([id, raw]) =>
-        parseDevice(source, id, typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {})
-      );
-      return { devices: devs, ok: true };
+    // 3. Last resort: fetch root fully and detect SMS records
+    const rootFull = await tryFetch(`${base}/.json`);
+    if (rootFull && Object.keys(rootFull).length > 0) {
+      const firstVal = Object.values(rootFull)[0];
+      if (firstVal && typeof firstVal === 'object' && !Array.isArray(firstVal) &&
+          isSmsRecord(firstVal as Record<string, unknown>)) {
+        const devs = devicesFromSmsRecords(source, rootFull);
+        if (devs.length > 0) return { devices: devs, ok: true };
+      }
     }
 
     return { devices: [], ok: true };
