@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Wifi, WifiOff, RefreshCw, Settings, Smartphone, Activity } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, Settings, Smartphone, Activity, Zap, MessageSquare } from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
 import Link from 'next/link';
 
@@ -80,12 +80,29 @@ function timeAgo(ts: number): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+async function adminWrite(path: string, method: string, data: unknown): Promise<boolean> {
+  try {
+    const url = loadStr('panel_rtdb_url');
+    const saRaw = loadStr('panel_service_account');
+    if (!url) return false;
+    const res = await fetch('/api/admin-rtdb', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAccount: saRaw ? JSON.parse(saRaw) : undefined, rtdbUrl: url, path, method, data }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const json = await res.json() as { error?: string };
+    return !json.error;
+  } catch { return false; }
+}
+
 export default function ConnectionPage() {
   const { idToken } = useAuth();
   const [devices, setDevices] = useState<QuickDevice[]>([]);
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [pingState, setPingState] = useState<Record<string, 'idle' | 'pinging' | 'done'>>({});
 
   const fetchDevices = useCallback(async () => {
     const url = loadStr('panel_rtdb_url');
@@ -134,6 +151,13 @@ export default function ConnectionPage() {
     const t = setInterval(fetchDevices, 30_000);
     return () => clearInterval(t);
   }, [fetchDevices]);
+
+  async function pingDevice(id: string) {
+    setPingState(p => ({ ...p, [id]: 'pinging' }));
+    await adminWrite(`/clients/${id}/ping`, 'PUT', { timestamp: Date.now(), pingedAt: Date.now(), ping: true });
+    setPingState(p => ({ ...p, [id]: 'done' }));
+    setTimeout(() => setPingState(p => ({ ...p, [id]: 'idle' })), 2500);
+  }
 
   const onlineDevices = devices.filter(d => d.online);
   const offlineDevices = devices.filter(d => !d.online);
@@ -236,24 +260,43 @@ export default function ConnectionPage() {
               </div>
               <div className="divide-y divide-slate-700/30">
                 {onlineDevices.map(d => (
-                  <Link key={d.id} href={`/devices/${d.id}`}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-slate-800/40 transition-colors">
-                    <div className="w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center flex-shrink-0">
-                      <Smartphone className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-100 truncate">{d.name}</p>
-                      <p className="text-xs text-slate-500 truncate">{d.phone || d.network || d.id.slice(0,16)}</p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                  <div key={d.id} className="flex items-center gap-3 px-4 py-3">
+                    <Link href={`/devices/${d.id}`} className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80 transition-opacity">
+                      <div className="w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center flex-shrink-0">
+                        <Smartphone className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-100 truncate">{d.name}</p>
+                        <p className="text-xs text-slate-500 truncate">{d.phone || d.network || d.id.slice(0, 16)}</p>
+                      </div>
                       {d.battery != null && (
-                        <span className={`text-xs font-bold ${d.battery > 50 ? 'text-emerald-400' : d.battery > 20 ? 'text-amber-400' : 'text-red-400'}`}>
+                        <span className={`text-xs font-bold flex-shrink-0 ${d.battery > 50 ? 'text-emerald-400' : d.battery > 20 ? 'text-amber-400' : 'text-red-400'}`}>
                           {d.battery}%
                         </span>
                       )}
-                      <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                    </Link>
+                    {/* Quick control buttons */}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => pingDevice(d.id)}
+                        disabled={pingState[d.id] === 'pinging'}
+                        title="Ping device"
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                          pingState[d.id] === 'done'
+                            ? 'bg-emerald-500/20 text-emerald-400'
+                            : pingState[d.id] === 'pinging'
+                              ? 'bg-slate-700 text-slate-500'
+                              : 'bg-slate-700/60 text-slate-400 hover:bg-slate-700 hover:text-amber-400'
+                        }`}>
+                        <Zap className={`w-3.5 h-3.5 ${pingState[d.id] === 'pinging' ? 'animate-pulse' : ''}`} />
+                      </button>
+                      <Link href={`/devices/${d.id}#sms`} title="Send SMS"
+                        className="w-7 h-7 rounded-lg bg-slate-700/60 flex items-center justify-center text-slate-400 hover:bg-teal-500/20 hover:text-teal-400 transition-colors">
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      </Link>
+                      <Activity className="w-3.5 h-3.5 text-emerald-400 ml-0.5" />
                     </div>
-                  </Link>
+                  </div>
                 ))}
               </div>
               {onlineDevices.length < devices.length && (

