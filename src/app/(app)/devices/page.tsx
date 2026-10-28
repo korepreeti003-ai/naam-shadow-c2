@@ -129,27 +129,50 @@ function hasRealDeviceData(devs: RtdbDevice[]): boolean {
   return devs.some(d => d.fields.length >= 1);
 }
 
-// Build unique device list from SMS queue records
-function devicesFromSmsRecords(source: RtdbSource, data: Record<string, unknown>): RtdbDevice[] {
-  const byDeviceId = new Map<string, { phone: string; online: boolean }>();
-  for (const raw of Object.values(data)) {
+// Build unique device list from SMS queue records + merge with /devices/{id} data
+async function devicesFromSmsRecords(
+  source: RtdbSource,
+  smsData: Record<string, unknown>,
+  base: string
+): Promise<RtdbDevice[]> {
+  // Extract unique device IDs and their phone numbers from SMS records
+  const byDeviceId = new Map<string, string>();
+  for (const raw of Object.values(smsData)) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const r = raw as Record<string, unknown>;
     const devId = String(r['targetDeviceId'] ?? r['deviceId'] ?? r['device_id'] ?? '');
     if (!devId) continue;
-    const phone = String(r['NUMBER'] ?? r['num'] ?? r['number'] ?? r['Number'] ?? '');
-    const prev = byDeviceId.get(devId);
-    if (!prev) byDeviceId.set(devId, { phone, online: isOnline(r) });
+    if (!byDeviceId.has(devId)) {
+      const phone = String(r['NUMBER'] ?? r['num'] ?? r['number'] ?? r['Number'] ?? '');
+      byDeviceId.set(devId, phone);
+    }
   }
-  return Array.from(byDeviceId.entries()).map(([devId, info]) => ({
-    id: `${source.id}_${devId}`,
-    sourceId: source.id,
-    sourceName: source.name,
-    displayName: devId.slice(0, 16),
-    online: info.online,
-    fields: info.phone ? [{ label: 'NUMBER', value: info.phone }] : [],
-    battery: undefined,
-  }));
+  if (byDeviceId.size === 0) return [];
+
+  // Try to fetch full device records from /devices
+  const deviceData = await tryFetch(`${base}/devices.json`);
+
+  return Array.from(byDeviceId.entries()).map(([devId, smsPhone]) => {
+    const deviceRecord = deviceData?.[devId];
+    if (deviceRecord && typeof deviceRecord === 'object' && !Array.isArray(deviceRecord)) {
+      // Real device record found — parse it fully
+      const dev = parseDevice(source, devId, deviceRecord as Record<string, unknown>);
+      // If phone not extracted from device record, use SMS phone
+      if (!dev.fields.find(f => f.label === 'NUMBER') && smsPhone)
+        dev.fields.splice(dev.battery != null ? 3 : 2, 0, { label: 'NUMBER', value: smsPhone });
+      return dev;
+    }
+    // No device record — show device ID + phone from SMS
+    return {
+      id: `${source.id}_${devId}`,
+      sourceId: source.id,
+      sourceName: source.name,
+      displayName: devId.slice(0, 16),
+      online: false,
+      fields: smsPhone ? [{ label: 'NUMBER', value: smsPhone }] : [],
+      battery: undefined,
+    };
+  });
 }
 
 async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
@@ -185,7 +208,7 @@ async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDe
           // These are SMS records keyed by something — get full root and extract devices
           const all = await tryFetch(`${base}/.json`);
           if (all) {
-            const devs = devicesFromSmsRecords(source, all);
+            const devs = await devicesFromSmsRecords(source, all, base);
             if (devs.length > 0) return { devices: devs, ok: true };
           }
         } else if (samples.some(s => s && Object.keys(s).length > 2)) {
@@ -206,7 +229,7 @@ async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDe
       const firstVal = Object.values(rootFull)[0];
       if (firstVal && typeof firstVal === 'object' && !Array.isArray(firstVal) &&
           isSmsRecord(firstVal as Record<string, unknown>)) {
-        const devs = devicesFromSmsRecords(source, rootFull);
+        const devs = await devicesFromSmsRecords(source, rootFull, base);
         if (devs.length > 0) return { devices: devs, ok: true };
       }
     }
