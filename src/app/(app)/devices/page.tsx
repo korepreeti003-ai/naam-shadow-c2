@@ -1,13 +1,12 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Search, RefreshCw, Wifi, WifiOff, Database, Plus, X, Loader2 } from 'lucide-react';
+import { Search, RefreshCw, Wifi, WifiOff, Database, Plus, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 interface RtdbSource {
   id: string;
   name: string;
   url: string;
-  path: string;
 }
 
 interface RtdbDevice {
@@ -30,84 +29,73 @@ function loadSources(): RtdbSource[] {
   } catch { return []; }
 }
 
-async function fetchSourceDevices(source: RtdbSource): Promise<RtdbDevice[]> {
+function saveSources(sources: RtdbSource[]) {
+  try { localStorage.setItem('rtdb_sources', JSON.stringify(sources)); } catch { /* */ }
+}
+
+function urlToName(url: string): string {
+  try { return new URL(url).hostname.split('.')[0]; } catch { return url.slice(0, 20); }
+}
+
+async function fetchSourceDevices(source: RtdbSource): Promise<{ devices: RtdbDevice[]; ok: boolean }> {
   try {
     const base = source.url.replace(/\/$/, '');
-    const path = (source.path || 'devices').replace(/^\/|\/$/g, '');
-    const res = await fetch(`${base}/${path}.json`, { cache: 'no-store' });
-    if (!res.ok) return [];
+    const res = await fetch(`${base}/devices.json`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return { devices: [], ok: false };
     const data = await res.json() as Record<string, unknown> | null;
-    if (!data || typeof data !== 'object') return [];
-    return Object.entries(data).map(([devId, raw]) => {
+    if (!data || typeof data !== 'object') return { devices: [], ok: true };
+    const devices = Object.entries(data).map(([devId, raw]) => {
       const d = raw as Record<string, unknown>;
-      const online =
-        d['online'] === true || d['status'] === 'online' || d['connected'] === true;
+      const online = d['online'] === true || d['status'] === 'online' || d['connected'] === true;
       const battery =
-        typeof d['battery'] === 'number'
-          ? d['battery']
-          : typeof d['batteryLevel'] === 'number'
-          ? d['batteryLevel']
-          : typeof d['bat'] === 'number'
-          ? d['bat']
-          : undefined;
+        typeof d['battery'] === 'number' ? d['battery'] :
+        typeof d['batteryLevel'] === 'number' ? d['batteryLevel'] :
+        typeof d['bat'] === 'number' ? d['bat'] : undefined;
       return {
         id: `${source.id}_${devId}`,
         sourceId: source.id,
         sourceName: source.name,
         name: String(d['name'] ?? d['model'] ?? d['device'] ?? devId),
         model: d['model'] ? String(d['model']) : d['device'] ? String(d['device']) : undefined,
-        phone: d['phoneNumber']
-          ? String(d['phoneNumber'])
-          : d['phone']
-          ? String(d['phone'])
-          : d['number']
-          ? String(d['number'])
-          : d['sim']
-          ? String(d['sim'])
-          : undefined,
-        network: d['network']
-          ? String(d['network'])
-          : d['networkType']
-          ? String(d['networkType'])
-          : d['operator']
-          ? String(d['operator'])
-          : undefined,
+        phone: d['phoneNumber'] ? String(d['phoneNumber']) : d['phone'] ? String(d['phone']) : d['number'] ? String(d['number']) : d['sim'] ? String(d['sim']) : undefined,
+        network: d['network'] ? String(d['network']) : d['networkType'] ? String(d['networkType']) : d['operator'] ? String(d['operator']) : undefined,
         battery,
-        android: d['androidVersion']
-          ? String(d['androidVersion'])
-          : d['android']
-          ? String(d['android'])
-          : d['osVersion']
-          ? String(d['osVersion'])
-          : undefined,
+        android: d['androidVersion'] ? String(d['androidVersion']) : d['android'] ? String(d['android']) : d['osVersion'] ? String(d['osVersion']) : undefined,
         online,
       };
     });
-  } catch { return []; }
+    return { devices, ok: true };
+  } catch { return { devices: [], ok: false }; }
 }
 
 export default function DevicesPage() {
   const [sources, setSources] = useState<RtdbSource[]>([]);
   const [devices, setDevices] = useState<RtdbDevice[]>([]);
+  const [deadIds, setDeadIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'online' | 'offline'>('all');
 
-  // Quick-add URL form
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', url: '', path: 'devices' });
-  const [addError, setAddError] = useState('');
+  const [bulkText, setBulkText] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addResult, setAddResult] = useState('');
 
-  useEffect(() => {
-    setSources(loadSources());
-  }, []);
+  useEffect(() => { setSources(loadSources()); }, []);
 
   const refresh = useCallback(async (srcs: RtdbSource[]) => {
     if (!srcs.length) return;
     setLoading(true);
     try {
       const results = await Promise.all(srcs.map(fetchSourceDevices));
-      setDevices(results.flat());
+      const dead = new Set<string>();
+      const allDevices: RtdbDevice[] = [];
+      results.forEach((r, i) => {
+        if (!r.ok) dead.add(srcs[i].id);
+        allDevices.push(...r.devices);
+      });
+      setDeadIds(dead);
+      setDevices(allDevices);
     } finally {
       setLoading(false);
     }
@@ -119,26 +107,54 @@ export default function DevicesPage() {
     return () => clearInterval(t);
   }, [sources, refresh]);
 
-  function handleAdd() {
-    if (!form.url.trim()) { setAddError('URL required'); return; }
-    if (!form.url.startsWith('https://')) { setAddError('Must start with https://'); return; }
-    const newSource: RtdbSource = {
-      id: Date.now().toString(),
-      name: form.name.trim() || new URL(form.url).hostname.split('.')[0],
-      url: form.url.trim(),
-      path: form.path.trim() || 'devices',
-    };
-    const updated = [...sources, newSource];
-    localStorage.setItem('rtdb_sources', JSON.stringify(updated));
-    setSources(updated);
-    setForm({ name: '', url: '', path: 'devices' });
+  async function handleBulkAdd() {
+    const lines = bulkText
+      .split(/[\n,]+/)
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('https://'));
+
+    if (!lines.length) { setAddResult('Koi valid URL nahi mili'); return; }
+
+    setAdding(true);
+    setAddResult('');
+
+    const existing = loadSources();
+    const existingUrls = new Set(existing.map((s) => s.url));
+    const toTest = lines.filter((u) => !existingUrls.has(u));
+
+    let added = 0;
+    let skipped = 0;
+
+    const newSources: RtdbSource[] = [...existing];
+
+    await Promise.all(
+      toTest.map(async (url) => {
+        const src: RtdbSource = {
+          id: Date.now().toString() + Math.random().toString(36).slice(2),
+          name: urlToName(url),
+          url,
+        };
+        const result = await fetchSourceDevices(src);
+        if (result.ok) {
+          newSources.push(src);
+          added++;
+        } else {
+          skipped++;
+        }
+      })
+    );
+
+    saveSources(newSources);
+    setSources([...newSources]);
+    setAdding(false);
+    setBulkText('');
     setAddOpen(false);
-    setAddError('');
+    setAddResult(`${added} add hui, ${skipped} skip (offline/error), ${lines.length - toTest.length} already the`);
   }
 
   function handleRemoveSource(id: string) {
     const updated = sources.filter((s) => s.id !== id);
-    localStorage.setItem('rtdb_sources', JSON.stringify(updated));
+    saveSources(updated);
     setSources(updated);
     setDevices((d) => d.filter((dev) => dev.sourceId !== id));
   }
@@ -160,7 +176,6 @@ export default function DevicesPage() {
 
   return (
     <div className="space-y-4 animate-fade-in">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Devices</h1>
@@ -169,24 +184,15 @@ export default function DevicesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => refresh(sources)}
-            disabled={loading || !sources.length}
-            className="btn-secondary p-2"
-            title="Refresh"
-          >
+          <button onClick={() => refresh(sources)} disabled={loading || !sources.length} className="btn-secondary p-2" title="Refresh">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            onClick={() => { setAddOpen(true); setAddError(''); }}
-            className="btn-primary flex items-center gap-1.5 text-sm"
-          >
+          <button onClick={() => { setAddOpen(true); setAddResult(''); }} className="btn-primary flex items-center gap-1.5 text-sm">
             <Plus className="w-4 h-4" /> Add URL
           </button>
         </div>
       </div>
 
-      {/* Stats bar */}
       <div className="flex gap-3">
         {[
           { label: 'TOTAL', val: devices.length, color: 'text-slate-700 dark:text-slate-200' },
@@ -194,27 +200,24 @@ export default function DevicesPage() {
           { label: 'OFFLINE', val: offlineCount, color: 'text-slate-400' },
           { label: 'SOURCES', val: sources.length, color: 'text-brand-600 dark:text-brand-400' },
         ].map(({ label, val, color }) => (
-          <div key={label} className="card px-4 py-2 flex-1 text-center">
+          <div key={label} className="card px-3 py-2 flex-1 text-center">
             <p className={`text-xl font-bold ${color}`}>{val}</p>
             <p className="text-xs text-slate-400 font-medium">{label}</p>
           </div>
         ))}
       </div>
 
-      {/* Sources list */}
       {sources.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {sources.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-50 dark:bg-brand-950 border border-brand-200 dark:border-brand-800 text-xs text-brand-700 dark:text-brand-300"
-            >
-              <Database className="w-3 h-3" />
+            <div key={s.id} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs ${
+              deadIds.has(s.id)
+                ? 'bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400'
+                : 'bg-brand-50 dark:bg-brand-950 border-brand-200 dark:border-brand-800 text-brand-700 dark:text-brand-300'
+            }`}>
+              {deadIds.has(s.id) ? <AlertCircle className="w-3 h-3" /> : <Database className="w-3 h-3" />}
               <span className="font-medium">{s.name}</span>
-              <button
-                onClick={() => handleRemoveSource(s.id)}
-                className="text-brand-400 hover:text-red-500 ml-0.5"
-              >
+              <button onClick={() => handleRemoveSource(s.id)} className="hover:text-red-500 ml-0.5">
                 <X className="w-3 h-3" />
               </button>
             </div>
@@ -222,71 +225,51 @@ export default function DevicesPage() {
         </div>
       )}
 
-      {/* Add URL form */}
       {addOpen && (
         <div className="card p-4 space-y-3 border-2 border-brand-200 dark:border-brand-800">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Add Firebase RTDB Source</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Name (optional)</label>
-              <input
-                className="input text-sm"
-                placeholder="My Firebase"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">RTDB URL *</label>
-              <input
-                className="input text-sm font-mono"
-                placeholder="https://my-project-default-rtdb.firebaseio.com"
-                value={form.url}
-                onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Devices path</label>
-              <input
-                className="input text-sm font-mono"
-                placeholder="devices"
-                value={form.path}
-                onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
-              />
-            </div>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Firebase RTDB URLs add karo</h3>
+            <button onClick={() => setAddOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
           </div>
-          {addError && <p className="text-xs text-red-500">{addError}</p>}
-          <div className="flex gap-2 justify-end">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+              URL paste karo — ek ya multiple (ek line mein ek URL)
+            </label>
+            <textarea
+              className="input text-sm font-mono h-32 resize-none w-full"
+              placeholder={"https://project1-default-rtdb.firebaseio.com\nhttps://project2-default-rtdb.firebaseio.com\nhttps://project3-default-rtdb.firebaseio.com"}
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              autoFocus
+            />
+            <p className="text-xs text-slate-400 mt-1">Jo URLs band hain ya reach nahi ho sakti, unhe automatically skip kar dega</p>
+          </div>
+          <div className="flex gap-2 justify-end items-center">
+            {adding && <span className="text-xs text-slate-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Check kar raha hai...</span>}
             <button onClick={() => setAddOpen(false)} className="btn-secondary text-sm py-1.5 px-3">Cancel</button>
-            <button onClick={handleAdd} className="btn-primary text-sm py-1.5 px-3">Add & Load</button>
+            <button onClick={handleBulkAdd} disabled={adding || !bulkText.trim()} className="btn-primary text-sm py-1.5 px-3">
+              {adding ? 'Adding...' : 'Add URLs'}
+            </button>
           </div>
         </div>
       )}
 
-      {/* Search + filter */}
+      {addResult && (
+        <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 rounded-lg px-3 py-2">
+          <CheckCircle className="w-4 h-4 flex-shrink-0" />
+          {addResult}
+        </div>
+      )}
+
       {devices.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative flex-1 min-w-48">
+          <div className="relative flex-1 min-w-40">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="search"
-              placeholder="Search by name or phone…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="input pl-10 w-full"
-            />
+            <input type="search" placeholder="Search by name or phone…" value={search} onChange={(e) => setSearch(e.target.value)} className="input pl-10 w-full" />
           </div>
           <div className="flex gap-1.5">
             {(['all', 'online', 'offline'] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${
-                  filter === f
-                    ? 'bg-brand-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                }`}
-              >
+              <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${filter === f ? 'bg-brand-600 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
                 {f}
               </button>
             ))}
@@ -294,26 +277,21 @@ export default function DevicesPage() {
         </div>
       )}
 
-      {/* Empty state */}
       {!sources.length && !loading && (
         <div className="card p-12 text-center space-y-4">
           <Database className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto" />
           <div>
-            <p className="text-slate-700 dark:text-slate-300 font-medium">No RTDB sources added</p>
+            <p className="text-slate-700 dark:text-slate-300 font-medium">Koi RTDB URL nahi add hua</p>
             <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">
-              Click &quot;Add URL&quot; and paste your Firebase RTDB URL to see devices
+              &quot;Add URL&quot; dabao aur apna Firebase RTDB URL paste karo
             </p>
           </div>
-          <button
-            onClick={() => { setAddOpen(true); setAddError(''); }}
-            className="btn-primary mx-auto"
-          >
+          <button onClick={() => { setAddOpen(true); setAddResult(''); }} className="btn-primary mx-auto flex items-center gap-1.5">
             <Plus className="w-4 h-4" /> Add Firebase URL
           </button>
         </div>
       )}
 
-      {/* Loading skeleton */}
       {loading && !devices.length && (
         <div className="grid grid-cols-2 gap-3">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -326,33 +304,14 @@ export default function DevicesPage() {
         </div>
       )}
 
-      {/* Device cards */}
       {filtered.length > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filtered.map((device) => (
-            <div
-              key={device.id}
-              className={`card p-3 space-y-2 border ${
-                device.online
-                  ? 'border-emerald-200 dark:border-emerald-800'
-                  : 'border-slate-200 dark:border-slate-700'
-              }`}
-            >
-              {/* Name + status */}
+            <div key={device.id} className={`card p-3 space-y-2 border ${device.online ? 'border-emerald-200 dark:border-emerald-800' : 'border-slate-200 dark:border-slate-700'}`}>
               <div className="flex items-start justify-between gap-1">
-                <p className="text-sm font-semibold text-slate-900 dark:text-white leading-tight line-clamp-1">
-                  {device.name}
-                </p>
-                <div className="flex-shrink-0">
-                  {device.online ? (
-                    <Wifi className="w-4 h-4 text-emerald-500" />
-                  ) : (
-                    <WifiOff className="w-4 h-4 text-slate-400" />
-                  )}
-                </div>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white leading-tight line-clamp-1">{device.name}</p>
+                {device.online ? <Wifi className="w-4 h-4 text-emerald-500 flex-shrink-0" /> : <WifiOff className="w-4 h-4 text-slate-400 flex-shrink-0" />}
               </div>
-
-              {/* Status + source */}
               <div className="flex items-center gap-1.5">
                 <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                 <span className={`text-xs font-medium ${device.online ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
@@ -361,13 +320,11 @@ export default function DevicesPage() {
                 <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
                 <span className="text-xs text-slate-400 truncate">{device.sourceName}</span>
               </div>
-
-              {/* Details */}
               <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-700/50">
                 {device.model && (
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-400">MODEL</span>
-                    <span className="text-slate-600 dark:text-slate-300 font-mono text-right line-clamp-1 max-w-[120px]">{device.model}</span>
+                    <span className="text-slate-600 dark:text-slate-300 font-mono text-right line-clamp-1 max-w-[110px]">{device.model}</span>
                   </div>
                 )}
                 {device.android && (
@@ -379,9 +336,7 @@ export default function DevicesPage() {
                 {device.battery != null && (
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-400">BATTERY</span>
-                    <span className={`font-medium ${device.battery > 30 ? 'text-emerald-500' : device.battery > 10 ? 'text-amber-500' : 'text-red-500'}`}>
-                      {device.battery}%
-                    </span>
+                    <span className={`font-medium ${device.battery > 30 ? 'text-emerald-500' : device.battery > 10 ? 'text-amber-500' : 'text-red-500'}`}>{device.battery}%</span>
                   </div>
                 )}
                 {device.phone && (
@@ -402,17 +357,14 @@ export default function DevicesPage() {
         </div>
       )}
 
-      {/* No results after filter */}
       {sources.length > 0 && !loading && devices.length > 0 && filtered.length === 0 && (
-        <div className="text-center py-8 text-slate-400 text-sm">No devices match your search</div>
+        <div className="text-center py-8 text-slate-400 text-sm">Koi device nahi mila</div>
       )}
 
-      {/* Sources loaded but no devices found */}
       {sources.length > 0 && !loading && devices.length === 0 && (
         <div className="card p-8 text-center text-slate-400 text-sm space-y-2">
-          <p>No devices found in your RTDB sources.</p>
-          <p className="text-xs">Make sure your devices path is correct (default: <code className="font-mono">devices</code>)</p>
-          <p className="text-xs">And that RTDB rules allow read: <code className="font-mono">{'.read: true'}</code></p>
+          <p>RTDB mein koi device nahi mila</p>
+          <p className="text-xs">Check karo: path <code className="font-mono">devices</code> sahi hai? Rules <code className="font-mono">.read: true</code> hai?</p>
         </div>
       )}
     </div>
