@@ -19,11 +19,11 @@ interface RtdbDevice {
   battery?: number;
 }
 
-const MODEL_KEYS = ['model','Model','deviceModel','DeviceModel','device','Device','phoneModel','PhoneModel','brand','Brand','DeviceName','deviceName','name','Name'];
+const MODEL_KEYS = ['modelName','ModelName','model','Model','deviceModel','DeviceModel','device','Device','phoneModel','PhoneModel','brand','Brand','DeviceName','deviceName','name','Name'];
 const ANDROID_KEYS = ['version','Version','androidVersion','AndroidVersion','android','Android','osVersion','OsVersion','sdkVersion','SdkVersion','AndroidVer','androidVer'];
-const BATTERY_KEYS = ['battery','Battery','batteryLevel','BatteryLevel','bat','Bat','batteryPercentage','BatteryPercentage','BatteryStatus','batteryStatus','charge','Charge'];
-const PHONE_KEYS = ['phoneNumber','PhoneNumber','phone','Phone','number','Number','sim','SIM','simNumber','SimNumber','mobile','Mobile','simNo','SimNo','contactNumber','ContactNumber','mobileNumber','MobileNumber'];
-const NETWORK_KEYS = ['network','Network','networkType','NetworkType','operator','Operator','simOperator','SimOperator','networkOperator','NetworkOperator','carrier','Carrier','isp','ISP','telecom','Telecom'];
+const BATTERY_KEYS = ['batteryPercent','BatteryPercent','battery','Battery','batteryLevel','BatteryLevel','bat','Bat','batteryPercentage','BatteryPercentage','charge','Charge'];
+const PHONE_KEYS = ['mobNo','MobNo','phoneNumber','PhoneNumber','phone','Phone','number','Number','mobile','Mobile','mobileNumber','MobileNumber','simNo','SimNo','contactNumber','ContactNumber'];
+const NETWORK_KEYS = ['provider','Provider','network','Network','networkType','NetworkType','operator','Operator','simOperator','SimOperator','networkOperator','NetworkOperator','carrier','Carrier','isp','ISP','telecom','Telecom'];
 const ONLINE_KEYS = ['online','Online','isOnline','IsOnline','connected','Connected'];
 const STATUS_KEYS = ['status','Status','connection','Connection','deviceStatus','DeviceStatus'];
 const SKIP_KEYS = new Set([...ONLINE_KEYS,...STATUS_KEYS,'lastSeen','LastSeen','updatedAt','UpdatedAt','createdAt','CreatedAt','fcmToken','FcmToken','token','Token','registrationToken','RegistrationToken','id','Id','uid','Uid','pushToken','PushToken','regId','RegId','gcmToken','GcmToken']);
@@ -34,15 +34,27 @@ function first(obj: Record<string, unknown>, keys: string[]): unknown {
 }
 
 function flatten(raw: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = { ...raw };
   for (const [k, v] of Object.entries(raw)) {
     if (v == null) continue;
+    // sims array: extract phoneNumber and network from first SIM
+    if ((k === 'sims' || k === 'Sims') && Array.isArray(v) && v.length > 0) {
+      const sim0 = v[0] as Record<string, unknown>;
+      if (sim0?.phoneNumber) out['phoneNumber'] = sim0.phoneNumber;
+      if (sim0?.number) out['number'] = sim0.number;
+      if (sim0?.operator) out['operator'] = sim0.operator;
+      if (sim0?.network) out['network'] = sim0.network;
+      if (sim0?.provider) out['provider'] = sim0.provider;
+    }
+    // networks array: extract first element as provider
+    if ((k === 'networks' || k === 'Networks') && Array.isArray(v) && v.length > 0) {
+      if (!out['provider']) out['provider'] = String(v[0]);
+    }
+    // nested object: merge one level
     if (typeof v === 'object' && !Array.isArray(v)) {
       for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
-        if (v2 != null) out[k2] = v2;
+        if (v2 != null && !(k2 in out)) out[k2] = v2;
       }
-    } else {
-      out[k] = v;
     }
   }
   return out;
@@ -66,7 +78,7 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   };
 
   const brand = toStr(first(raw, ['Brand','brand']));
-  const modelOnly = toStr(first(raw, ['model','Model','deviceModel','DeviceModel','device','Device','phoneModel']));
+  const modelOnly = toStr(first(raw, ['modelName','ModelName','model','Model','deviceModel','DeviceModel','device','Device','phoneModel']));
   const model = brand && modelOnly && !modelOnly.toLowerCase().startsWith(brand.toLowerCase())
     ? `${brand} ${modelOnly}` : (modelOnly || brand || '');
 
@@ -74,7 +86,8 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   const batteryVal = toNum(first(raw, BATTERY_KEYS));
   const phone = toStr(first(raw, PHONE_KEYS));
   const network = toStr(first(raw, NETWORK_KEYS));
-  const displayName = model || toStr(first(raw, ['name','Name','deviceName','DeviceName'])) || devId;
+  const ip = toStr(first(raw, ['ip','IP','ipAddress','IpAddress']));
+  const displayName = model || toStr(first(raw, ['modelName','name','Name','deviceName','DeviceName'])) || devId;
 
   const fields: Array<{ label: string; value: string | number }> = [];
   if (model) fields.push({ label: 'MODEL', value: model });
@@ -82,8 +95,9 @@ function parseDevice(source: RtdbSource, devId: string, rawOrig: Record<string, 
   if (batteryVal != null) fields.push({ label: 'BATTERY', value: batteryVal });
   if (phone) fields.push({ label: 'NUMBER', value: phone });
   if (network) fields.push({ label: 'NETWORK', value: network });
+  if (ip) fields.push({ label: 'IP', value: ip });
 
-  const knownKeys = new Set([...MODEL_KEYS,...ANDROID_KEYS,...BATTERY_KEYS,...PHONE_KEYS,...NETWORK_KEYS,...ONLINE_KEYS,...STATUS_KEYS,...Array.from(SKIP_KEYS)]);
+  const knownKeys = new Set([...MODEL_KEYS,...ANDROID_KEYS,...BATTERY_KEYS,...PHONE_KEYS,...NETWORK_KEYS,...ONLINE_KEYS,...STATUS_KEYS,...Array.from(SKIP_KEYS),'ip','IP','ipAddress','IpAddress','sims','Sims','networks','Networks','networkFromSms','mobNo','MobNo','modelName','ModelName','batteryPercent','BatteryPercent','provider','Provider']);
   for (const [k, v] of Object.entries(raw)) {
     if (knownKeys.has(k) || SKIP_KEYS.has(k)) continue;
     const s = toStr(v);
