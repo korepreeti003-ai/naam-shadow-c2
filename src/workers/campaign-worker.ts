@@ -113,49 +113,71 @@ async function startOrResumeCampaign(
     .where('status', '==', 'queued')
     .get();
 
-  const rateLimit = campaign.settings.rateLimit;
-  const delayPerMessage = Math.ceil(60000 / rateLimit); // ms between messages per device
+  const jobOpts = {
+    attempts: campaign.settings.retryCount,
+    backoff: { type: 'exponential' as const, delay: campaign.settings.retryDelayMs },
+  };
 
-  for (const contactDoc of pendingContacts.docs) {
-    const contact = { id: contactDoc.id, ...contactDoc.data() } as Contact;
-    const device = availableDevices[deviceIdx % availableDevices.length];
-    deviceIdx++;
+  // Process contacts in chunks: batch-create message docs + bulk-enqueue + batch-update contacts
+  const CHUNK = 500;
+  const docs = pendingContacts.docs;
 
-    // Create message record
-    const msgRef = await db.collection(COLLECTIONS.MESSAGES).add({
-      campaignId: campaign.id,
-      contactId: contact.id,
-      deviceId: device.id,
-      phone: contact.phone,
-      text: campaign.message,
-      status: 'queued',
-      retryCount: 0,
-      createdAt: new Date().toISOString(),
-    });
+  for (let i = 0; i < docs.length; i += CHUNK) {
+    const chunk = docs.slice(i, i + CHUNK);
+    const now = new Date().toISOString();
 
-    await messageQueue.add(
-      `msg-${msgRef.id}`,
-      {
-        messageId: msgRef.id,
+    // Pre-allocate message doc refs (no write yet)
+    const msgRefs = chunk.map(() => db.collection(COLLECTIONS.MESSAGES).doc());
+
+    // 1. Batch-create all message records in one Firestore batch
+    const writeBatch = db.batch();
+    for (let j = 0; j < chunk.length; j++) {
+      const contact = { id: chunk[j].id, ...chunk[j].data() } as Contact;
+      const device = availableDevices[(deviceIdx + j) % availableDevices.length];
+      writeBatch.set(msgRefs[j], {
         campaignId: campaign.id,
         contactId: contact.id,
         deviceId: device.id,
-        fcmToken: device.fcmToken,
         phone: contact.phone,
         text: campaign.message,
+        status: 'queued',
         retryCount: 0,
-      } as MessageJobData,
-      {
-        delay: Math.floor(totalQueued / availableDevices.length) * delayPerMessage,
-        attempts: campaign.settings.retryCount,
-        backoff: { type: 'exponential', delay: campaign.settings.retryDelayMs },
-      }
-    );
+        createdAt: now,
+      });
+    }
+    await writeBatch.commit();
 
-    // Update contact status
-    await contactDoc.ref.update({ status: 'sending', deviceId: device.id });
+    // 2. Bulk-enqueue all messages in a single BullMQ call
+    const bulkJobs = chunk.map((contactDoc, j) => {
+      const contact = { id: contactDoc.id, ...contactDoc.data() } as Contact;
+      const device = availableDevices[(deviceIdx + j) % availableDevices.length];
+      return {
+        name: `msg-${msgRefs[j].id}`,
+        data: {
+          messageId: msgRefs[j].id,
+          campaignId: campaign.id,
+          contactId: contact.id,
+          deviceId: device.id,
+          fcmToken: device.fcmToken,
+          phone: contact.phone,
+          text: campaign.message,
+          retryCount: 0,
+        } as MessageJobData,
+        opts: jobOpts,
+      };
+    });
+    await messageQueue.addBulk(bulkJobs);
 
-    totalQueued++;
+    // 3. Batch-update contact statuses
+    const contactBatch = db.batch();
+    for (let j = 0; j < chunk.length; j++) {
+      const device = availableDevices[(deviceIdx + j) % availableDevices.length];
+      contactBatch.update(chunk[j].ref, { status: 'sending', deviceId: device.id });
+    }
+    await contactBatch.commit();
+
+    deviceIdx += chunk.length;
+    totalQueued += chunk.length;
   }
 
   await campaignRef.update({
@@ -231,52 +253,27 @@ const messageWorker = new Worker<MessageJobData>(
     const msgRef = db.collection(COLLECTIONS.MESSAGES).doc(messageId);
 
     if (result.success) {
-      await msgRef.update({
-        status: 'dispatched',
-        fcmMessageId: result.messageId,
-        dispatchedAt: now,
-        updatedAt: now,
-      });
-
-      await db.collection(COLLECTIONS.CONTACTS).doc(contactId).update({
-        status: 'sent',
-        sentAt: now,
-      });
-
-      await db
-        .collection(COLLECTIONS.DEVICES)
-        .doc(deviceId)
-        .update({ messagesSent: increment(1) });
-
-      await db
-        .collection(COLLECTIONS.CAMPAIGNS)
-        .doc(campaignId)
-        .update({ 'stats.sent': increment(1), 'stats.sending': increment(-1) });
+      await Promise.all([
+        msgRef.update({ status: 'dispatched', fcmMessageId: result.messageId, dispatchedAt: now, updatedAt: now }),
+        db.collection(COLLECTIONS.CONTACTS).doc(contactId).update({ status: 'sent', sentAt: now }),
+        db.collection(COLLECTIONS.DEVICES).doc(deviceId).update({ messagesSent: increment(1) }),
+        db.collection(COLLECTIONS.CAMPAIGNS).doc(campaignId).update({ 'stats.sent': increment(1), 'stats.sending': increment(-1) }),
+      ]);
     } else {
       const isLastAttempt = job.attemptsMade >= (job.opts.attempts ?? 3) - 1;
 
       if (isLastAttempt) {
-        await msgRef.update({
-          status: 'failed',
-          failureReason: result.error,
-          updatedAt: now,
-        });
-
-        await db.collection(COLLECTIONS.CONTACTS).doc(contactId).update({
-          status: 'failed',
-          failureReason: result.error,
-        });
-
-        await db
-          .collection(COLLECTIONS.CAMPAIGNS)
-          .doc(campaignId)
-          .update({ 'stats.failed': increment(1), 'stats.sending': increment(-1) });
+        await Promise.all([
+          msgRef.update({ status: 'failed', failureReason: result.error, updatedAt: now }),
+          db.collection(COLLECTIONS.CONTACTS).doc(contactId).update({ status: 'failed', failureReason: result.error }),
+          db.collection(COLLECTIONS.CAMPAIGNS).doc(campaignId).update({ 'stats.failed': increment(1), 'stats.sending': increment(-1) }),
+        ]);
       } else {
-        throw new Error(result.error ?? 'FCM dispatch failed'); // triggers BullMQ retry
+        throw new Error(result.error ?? 'FCM dispatch failed');
       }
     }
   },
-  { connection, concurrency: 10 }
+  { connection, concurrency: 50 }
 );
 
 // ─── Lifecycle ─────────────────────────────────────────────────────────────
