@@ -29,10 +29,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return null;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
+    <div className="flex h-screen overflow-hidden bg-slate-950">
       <Sidebar />
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto px-6 py-8">{children}</div>
+        <div className="max-w-2xl mx-auto">{children}</div>
       </main>
     </div>
   );
