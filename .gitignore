@@ -42,3 +42,5 @@ next-env.d.ts
 *-service-account.json
 serviceAccountKey.json
 firebase-adminsdk-*.json
+samples/bot/sign.key
+samples/bot/sign.crt
