@@ -1,0 +1,28 @@
+=== DROPPER ===
+File       : Viral_Leaks_dropper.apk
+Package    : com.gdww.ihwc.hpfv
+Label      : Viral Leaks
+Size       : 5.0 MB
+
+SHA-256            : 0ee66145815c0861f55b86c1ba0f6bd25cb4ec1c0586f4e0557cd1a347e07384
+
+Payload asset  : assets/Axyra (4.67 MB, AES-256-CBC encrypted)
+Encryption key : b7fcadb82c9ee0bf873c9c1b670285c22814b69201d01fe640cb2e409131b7f1
+IV             : first 16 bytes of Axyra ciphertext (prepended)
+Algorithm      : AES/CBC/PKCS5Padding
+
+Key components:
+  MainActivity               — fake Play Store UI, orchestrator
+  MainActivity$VpnBypassService      — VPN cloak during install
+  MainActivity$InstallSessionReceiver — monitors install progress
+  MainActivity$PackageAddedReceiver  — confirms payload installed
+
+Permissions used:
+  BIND_VPN_SERVICE
+  REQUEST_INSTALL_PACKAGES
+  QUERY_ALL_PACKAGES
+  INTERNET
+  FOREGROUND_SERVICE
+
+Deception: ZIP structure intentionally mangled with path-traversal
+           entries to confuse static scanners.

@@ -1,0 +1,48 @@
+=== PAYLOAD (Banking Trojan) ===
+File       : banking_trojan_payload.apk
+Package    : com.btmo.awws.hoag
+Dev alias  : com.toxic.client
+Size       : 4.5 MB (decrypted from Axyra)
+SHA-256    : bd775f1f3880ea1c27a8e4a3a9bd4704dbe2d59f419f015567ed2007a7de80eb
+
+C2 Infrastructure:
+  Firebase Project   : toxicgen-f1d0c
+  Firebase RTDB      : https://toxicgen-f1d0c-default-rtdb.firebaseio.com
+  Firebase Storage   : toxicgen-f1d0c.firebasestorage.app
+  Firebase API Key   : AIzaSyBZYhllAJRF1_Sl4P5l-462QHZM310C4jQ
+  FCM Sender ID      : 1086425822943
+  Secondary channel  : Telegram bot (token runtime-assembled)
+  IP lookup          : https://api.ipify.org
+
+Critical activities:
+  CreditCardActivity    — overlay phishing for card details
+  NetBankingActivity    — overlay phishing for net banking creds
+  UpiPinActivity        — UPI PIN harvesting
+  SmsReceiver           — OTP interception (READ/RECEIVE/SEND_SMS)
+  BootReceiver          — boot persistence
+  ForegroundService     — always-running background service
+  MyFirebaseMessagingService — FCM command handler (C2)
+  MultiEventReceiver    — monitors 15+ system broadcasts
+  KeepAliveJobService   — anti-kill persistence
+  AlarmReceiver         — scheduled execution
+
+Webhook endpoints baked in:
+  /webhookEvent/smsForward
+  /webhookEvent/sendSms
+  /webhookEvent/sendMultipleSms
+  /webhookEvent/deleteSms
+  /webhookEvent/refreshSms
+  /webhookEvent/callForward
+  /lastSmsAck
+  /verifyPhoneNumber
+
+OTP regex: (?:Message|MESSAGE|Body|Full Message|SMS|)\s*(?:Tap to copy)?\s*[:\s]+
+
+Permissions:
+  READ_SMS / RECEIVE_SMS / SEND_SMS
+  CALL_PHONE
+  READ_PHONE_STATE / READ_PHONE_NUMBERS
+  RECEIVE_BOOT_COMPLETED
+  REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+  FOREGROUND_SERVICE / POST_NOTIFICATIONS
+  INTERNET / ACCESS_NETWORK_STATE
