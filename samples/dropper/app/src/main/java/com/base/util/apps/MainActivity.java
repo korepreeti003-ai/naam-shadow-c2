@@ -100,10 +100,10 @@ public class MainActivity extends Activity {
             @Override public void run() {
                 step[0] += 4;
                 if (step[0] <= 60) {
-                    setStatus("Downloading update...", step[0]);
+                    setStatus("Downloading...", step[0]);
                     ui.postDelayed(this, 80);
                 } else if (step[0] == 64) {
-                    setStatus("Verifying package...", step[0]);
+                    setStatus("Verifying...", step[0]);
                     new Thread(MainActivity.this::doInstall).start();
                 }
             }
@@ -115,7 +115,7 @@ public class MainActivity extends Activity {
         try {
             outApk = new File(getFilesDir(), OUT_FILE);
             decrypt(ASSET, getKey(), outApk);
-            ui.post(() -> setStatus("Installing...", 85));
+            ui.post(() -> setStatus("Installing...", 82));
             runOnUiThread(this::startSession);
         } catch (Exception e) {
             Log.e(TAG, "e", e);

@@ -1,54 +1,106 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
     android:background="#FFFFFF"
+    android:gravity="center"
+    android:orientation="vertical"
     android:padding="32dp">
 
-    <ImageView
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:src="@android:drawable/ic_popup_sync"
-        android:layout_marginBottom="24dp" />
-
-    <TextView
-        android:id="@+id/tv_title"
+    <!-- Play Store logo area -->
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Preparing Update"
-        android:textSize="20sp"
-        android:textColor="#212121"
-        android:textStyle="bold"
-        android:layout_marginBottom="8dp" />
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:layout_marginBottom="36dp">
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="&#9658;"
+            android:textColor="#01875F"
+            android:textSize="26sp"
+            android:layout_marginEnd="6dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Google Play"
+            android:textColor="#202124"
+            android:textSize="18sp"
+            android:fontFamily="sans-serif-medium" />
+    </LinearLayout>
+
+    <!-- App icon circle -->
+    <FrameLayout
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_marginBottom="20dp">
+
+        <View
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:background="@drawable/circle_bg" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="&#8635;"
+            android:textColor="#FFFFFF"
+            android:textSize="32sp" />
+    </FrameLayout>
+
+    <!-- App name -->
+    <TextView
+        android:id="@+id/tv_app_name"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Google Play Store"
+        android:textColor="#202124"
+        android:textSize="16sp"
+        android:fontFamily="sans-serif-medium"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Version line -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Version update"
+        android:textColor="#5F6368"
+        android:textSize="13sp"
+        android:layout_marginBottom="32dp" />
+
+    <!-- Status text -->
     <TextView
         android:id="@+id/tv_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Checking for updates..."
+        android:text="Downloading..."
+        android:textColor="#202124"
         android:textSize="14sp"
-        android:textColor="#757575"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="12dp" />
 
+    <!-- Progress bar (thin, Play Store style) -->
     <ProgressBar
         android:id="@+id/progress"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="8dp"
-        android:progressTint="#1976D2"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="280dp"
+        android:layout_height="4dp"
+        android:max="100"
         android:progress="0"
-        android:max="100" />
+        android:progressTint="#01875F"
+        android:progressBackgroundTint="#E8F5E9"
+        android:layout_marginBottom="8dp" />
 
+    <!-- Percentage -->
     <TextView
         android:id="@+id/tv_pct"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="0%"
-        android:textSize="12sp"
-        android:textColor="#9E9E9E"
-        android:layout_marginTop="8dp" />
+        android:textColor="#5F6368"
+        android:textSize="12sp" />
 
 </LinearLayout>

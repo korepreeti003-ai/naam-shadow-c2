@@ -62,9 +62,19 @@ jobs:
         working-directory: samples/dropper
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: dropper-release-apk
           path: samples/dropper/app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+      - name: Commit APK to repo
+        run: |
+          APK=$(ls samples/dropper/app/build/outputs/apk/release/*.apk | head -1)
+          cp "$APK" samples/bot/dropper_release.apk
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add samples/bot/dropper_release.apk
+          git diff --cached --quiet || git commit -m "ci: update dropper_release.apk [skip ci]"
+          git push
