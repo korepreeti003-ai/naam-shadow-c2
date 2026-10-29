@@ -1,0 +1,74 @@
+name: Build Dropper APK
+
+on:
+  push:
+    branches: [ "ccr-af5b32d0-ofbv99", "main" ]
+    paths:
+      - 'samples/dropper/**'
+  workflow_dispatch:   # manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform
+        run: |
+          yes | sdkmanager "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT
+
+      - name: Generate debug keystore for signing
+        run: |
+          keytool -genkeypair \
+            -alias androiddebugkey \
+            -keypass android \
+            -keystore samples/dropper/debug.keystore \
+            -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA -keysize 2048 -validity 10000
+
+      - name: Configure signing in build.gradle
+        run: |
+          cat >> samples/dropper/app/build.gradle << 'EOF'
+
+          android.signingConfigs {
+              release {
+                  storeFile file("../debug.keystore")
+                  storePassword "android"
+                  keyAlias "androiddebugkey"
+                  keyPassword "android"
+              }
+          }
+          android.buildTypes.release.signingConfig = android.signingConfigs.release
+          EOF
+
+      - name: Make gradlew executable
+        run: chmod +x samples/dropper/gradlew 2>/dev/null || true
+
+      - name: Build release APK
+        working-directory: samples/dropper
+        run: |
+          # Use gradle wrapper if present, else system gradle
+          if [ -f gradlew ]; then
+            ./gradlew assembleRelease --no-daemon --stacktrace
+          else
+            gradle assembleRelease --no-daemon --stacktrace
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dropper-release-apk
+          path: samples/dropper/app/build/outputs/apk/release/*.apk
+          retention-days: 30

