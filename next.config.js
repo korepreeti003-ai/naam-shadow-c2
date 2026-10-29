@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  // 'standalone' is for Docker/Railway; Netlify plugin uses its own bundling
+  ...(process.env.NETLIFY ? {} : { output: 'standalone' }),
   experimental: {
     serverComponentsExternalPackages: ['firebase-admin', 'bullmq', 'ioredis'],
   },
