@@ -170,7 +170,7 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
     signatures_list = _lp(_lp(sig_item_data))
 
     signer  = _lp(signed_data) + signatures_list + _lp(pub_der)
-    signers = _lp(signer)
+    signers = _lp(_lp(signer))    # outer = sequence, inner = per-signer LP item
 
     pair        = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
     block_size  = len(pair) + 8 + 16
