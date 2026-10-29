@@ -50,8 +50,8 @@ export async function POST(req: NextRequest) {
       optedOutCount: result.summary.optedOut,
       uploadedAt: now,
       uploadedBy: ctx.uid,
-      // Preview only — not yet persisted per contact
       preview: result.valid.slice(0, 5),
+      contacts: result.valid,
     });
 
     return Response.json(
