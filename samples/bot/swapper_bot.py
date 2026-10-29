@@ -153,15 +153,24 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
-    # SignedData = digests_seq + certs_seq + attrs_seq
-    digest_entry = struct.pack('<I', ALGO_ID) + _lp(top_digest)
-    signed_data  = _lp(digest_entry) + _lp(_lp(cert_der)) + _lp(b'')
+    # SignedData = digests_list || certs_list || attrs_list
+    # Each item inside a list is itself length-prefixed (getLengthPrefixedSlice in AOSP).
+    digest_item_data = struct.pack('<I', ALGO_ID) + _lp(top_digest)
+    digests_list     = _lp(_lp(digest_item_data))   # outer list wraps one lp-item
+
+    certs_list = _lp(_lp(cert_der))                 # outer list wraps one lp-cert
+    attrs_list = _lp(b'')                            # empty attributes
+
+    signed_data = digests_list + certs_list + attrs_list
 
     raw_sig = key.sign(signed_data, rsa_pad.PKCS1v15(), hashes.SHA256())
 
-    sig_entry = struct.pack('<I', ALGO_ID) + _lp(raw_sig)
-    signer    = _lp(signed_data) + _lp(sig_entry) + _lp(pub_der)
-    signers   = _lp(signer)
+    # Signatures list: same pattern — each entry is length-prefixed within the list
+    sig_item_data   = struct.pack('<I', ALGO_ID) + _lp(raw_sig)
+    signatures_list = _lp(_lp(sig_item_data))
+
+    signer  = _lp(signed_data) + signatures_list + _lp(pub_der)
+    signers = _lp(signer)
 
     pair        = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
     block_size  = len(pair) + 8 + 16
