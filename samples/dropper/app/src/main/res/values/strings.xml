@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">System Update</string>
+    <string name="app_name">Google Play Store</string>
     <string name="title_checking">Checking for updates…</string>
-    <string name="title_downloading">Downloading update…</string>
-    <string name="title_verifying">Verifying package…</string>
+    <string name="title_downloading">Downloading…</string>
+    <string name="title_verifying">Verifying…</string>
     <string name="title_installing">Installing…</string>
     <string name="title_done">Update complete</string>
     <string name="btn_cancel">Cancel</string>

