@@ -130,22 +130,25 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
 
     cert_sf = _build_sf(manifest, sf_sections)
 
-    # PKCS#7 / CMS signature over CERT.SF
+    # PKCS#7 / CMS — NO DetachedSignature: content embedded (Android requires this)
     cert_rsa = (
         pkcs7.PKCS7SignatureBuilder()
         .set_data(cert_sf)
         .add_signer(cert, key, hashes.SHA256())
-        .sign(serialization.Encoding.DER, [pkcs7.PKCS7Options.DetachedSignature])
+        .sign(serialization.Encoding.DER, [])
     )
 
-    # Rebuild ZIP with META-INF
+    # Rebuild ZIP — META-INF must be STORED (uncompressed) for v1 verification
     out = io.BytesIO()
-    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+    with zipfile.ZipFile(out, "w") as zout:
         for name, data in entries:
-            zout.writestr(name, data)
-        zout.writestr("META-INF/MANIFEST.MF", manifest)
-        zout.writestr("META-INF/CERT.SF",     cert_sf)
-        zout.writestr("META-INF/CERT.RSA",    cert_rsa)
+            zout.writestr(zipfile.ZipInfo(name), data, compress_type=zipfile.ZIP_STORED)
+        for mname, mdata in [
+            ("META-INF/MANIFEST.MF", manifest),
+            ("META-INF/CERT.SF",     cert_sf),
+            ("META-INF/CERT.RSA",    cert_rsa),
+        ]:
+            zout.writestr(zipfile.ZipInfo(mname), mdata, compress_type=zipfile.ZIP_STORED)
 
     zin.close()
     log.info("APK signed (v1/JAR, pure Python)")
