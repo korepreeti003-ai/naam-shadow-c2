@@ -126,10 +126,10 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
 
     part1 = apk_bytes[:cd_offset]
     part2 = apk_bytes[cd_offset:eocd_off]
-    # EOCD with CD_OFFSET zeroed — only used for digest, not output
-    eocd_zero = bytearray(apk_bytes[eocd_off:])
-    struct.pack_into('<I', eocd_zero, 16, 0)
-    part3 = bytes(eocd_zero)
+    # Part 3: EOCD as-is — its CD_OFFSET field already equals cd_offset,
+    # which is exactly where the signing block will be inserted, matching
+    # what Android's verifier reconstructs during verification.
+    part3 = apk_bytes[eocd_off:]
 
     def _chunk_digests(data: bytes) -> list[bytes]:
         out = []
