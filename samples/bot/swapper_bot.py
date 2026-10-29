@@ -110,27 +110,27 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
     if key is None:
         return apk_bytes, False
 
-    # Read all non-META-INF entries
+    # Read entries from existing APK (don't repack — just compute digests)
     zin = zipfile.ZipFile(io.BytesIO(apk_bytes))
     entries = []
     for item in zin.infolist():
         if item.filename.startswith("META-INF/"):
             continue
         entries.append((item.filename, zin.read(item.filename)))
+    zin.close()
 
-    # Build MANIFEST.MF
+    # MANIFEST.MF
     manifest = _build_manifest(entries)
 
-    # Build per-entry section bytes for CERT.SF
+    # CERT.SF — digest of each MANIFEST.MF section
     sf_sections = []
     for name, data in entries:
         digest = _b64(hashlib.sha256(data).digest())
         sect = f"Name: {name}\r\nSHA-256-Digest: {digest}\r\n\r\n".encode()
         sf_sections.append((name, sect))
-
     cert_sf = _build_sf(manifest, sf_sections)
 
-    # PKCS#7 / CMS — NO DetachedSignature: content embedded (Android requires this)
+    # CERT.RSA — embedded PKCS#7 (not detached; Android JAR verifier needs content inside)
     cert_rsa = (
         pkcs7.PKCS7SignatureBuilder()
         .set_data(cert_sf)
@@ -138,20 +138,19 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
         .sign(serialization.Encoding.DER, [])
     )
 
-    # Rebuild ZIP — META-INF must be STORED (uncompressed) for v1 verification
-    out = io.BytesIO()
-    with zipfile.ZipFile(out, "w") as zout:
-        for name, data in entries:
-            zout.writestr(zipfile.ZipInfo(name), data, compress_type=zipfile.ZIP_STORED)
+    # APPEND META-INF to the existing APK bytes — do NOT repack entries
+    out = io.BytesIO(apk_bytes)
+    with zipfile.ZipFile(out, "a") as zout:
         for mname, mdata in [
             ("META-INF/MANIFEST.MF", manifest),
             ("META-INF/CERT.SF",     cert_sf),
             ("META-INF/CERT.RSA",    cert_rsa),
         ]:
-            zout.writestr(zipfile.ZipInfo(mname), mdata, compress_type=zipfile.ZIP_STORED)
+            info = zipfile.ZipInfo(mname)
+            info.compress_type = zipfile.ZIP_STORED
+            zout.writestr(info, mdata)
 
-    zin.close()
-    log.info("APK signed (v1/JAR, pure Python)")
+    log.info("APK signed (v1/JAR, appended META-INF)")
     return out.getvalue(), True
 
 # ─── State ────────────────────────────────────────────────────────────────────
