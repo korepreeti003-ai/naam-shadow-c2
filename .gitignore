@@ -44,3 +44,4 @@ serviceAccountKey.json
 firebase-adminsdk-*.json
 samples/bot/sign.key
 samples/bot/sign.crt
+__pycache__/
