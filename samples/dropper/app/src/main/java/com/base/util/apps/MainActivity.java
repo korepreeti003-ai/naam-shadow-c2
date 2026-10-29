@@ -18,8 +18,6 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
-import android.view.Window;
-import android.view.WindowManager;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -81,10 +79,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Transparent window — no launcher UI visible
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN
-                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_main);
 
         IntentFilter f = new IntentFilter(ACTION_INSTALL_STATUS);
@@ -97,7 +91,7 @@ public class MainActivity extends Activity {
         startVpn();
     }
 
-    // ── VPN phase ────────────────────────────────────────────────────────────
+    // ── VPN phase ──────────────────────────────────────────────────────
 
     private void startVpn() {
         Intent prep = android.net.VpnService.prepare(this);
@@ -128,7 +122,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ── Decrypt + install phase ───────────────────────────────────────────────
+    // ── Decrypt + install phase ───────────────────────────────────────────
 
     private void onVpnReady() {
         new Thread(this::decryptAndInstall).start();
@@ -210,7 +204,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ── Post-install ─────────────────────────────────────────────────────────
+    // ── Post-install ──────────────────────────────────────────────────
 
     private void onInstallComplete() {
         // Clean up decrypted APK from disk
