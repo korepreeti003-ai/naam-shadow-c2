@@ -18,7 +18,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="▶"
+            android:text="&#9658;"
             android:textColor="#01875F"
             android:textSize="26sp"
             android:layout_marginEnd="6dp" />
@@ -47,7 +47,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:text="↺"
+            android:text="&#8635;"
             android:textColor="#FFFFFF"
             android:textSize="32sp" />
     </FrameLayout>
@@ -77,7 +77,7 @@
         android:id="@+id/tv_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Downloading update..."
+        android:text="Downloading..."
         android:textColor="#202124"
         android:textSize="14sp"
         android:layout_marginBottom="12dp" />
