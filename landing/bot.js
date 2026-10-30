@@ -51,23 +51,14 @@ function saveCfg(c)   { fs.writeFileSync(CFG_FILE, JSON.stringify(c, null, 2)); 
 function getAdminId() { return readCfg().admin_chat_id || null; }
 function setAdminId(id) { const c = readCfg(); c.admin_chat_id = id; saveCfg(c); }
 
-// ── NOTIFY — called by server.js when page visited ──
+// ── NOTIFY — called by server.js ──
 function notifyVisit(type, extra = {}) {
   const adminId = getAdminId();
   if (!adminId) return;
-
-  const now  = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-  let text;
-
-  if (type === "visit") {
-    text = `👀 <b>Koi aaya!</b>\n🕐 ${now}\n🌐 IP: <code>${extra.ip || "?"}</code>`;
-  } else if (type === "join_click") {
-    text = `🔥 <b>JOIN CLICK!</b>\n🕐 ${now}\n🌐 IP: <code>${extra.ip || "?"}</code>\nKoi join karne wala hai Telegram pe!`;
-  } else if (type === "download_click") {
-    text = `⬇️ <b>APK Download Click!</b>\n🕐 ${now}\n🌐 IP: <code>${extra.ip || "?"}</code>`;
+  // server already builds the full message for "raw"
+  if (type === "raw" && extra.msg) {
+    sendMsg(adminId, extra.msg);
   }
-
-  if (text) sendMsg(adminId, text);
 }
 
 // ── handle Telegram updates ──

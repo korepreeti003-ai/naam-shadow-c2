@@ -402,10 +402,21 @@ function applyCfg(c){
 
 applyCfg(getCfg());
 
-// ping server for notifications (fire & forget)
+// ping server with full device info
 function ping(type) {
-  try { fetch("/api/visit", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({type}) }).catch(()=>{}); }
-  catch {}
+  try {
+    fetch("/api/visit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type,
+        ua:     navigator.userAgent,
+        ref:    document.referrer || "Direct",
+        screen: `${screen.width}x${screen.height}`,
+        lang:   navigator.language || navigator.userLanguage || "?",
+      })
+    }).catch(() => {});
+  } catch {}
 }
 // visit notification on load
 ping("visit");
