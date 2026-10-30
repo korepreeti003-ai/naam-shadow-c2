@@ -5,8 +5,12 @@ const app     = express();
 const PORT    = process.env.PORT || 80;
 const CFG     = path.join(__dirname, "config.json");
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.use(express.static(__dirname));
+// serve uploaded APKs
+const apkDir = path.join(__dirname, "apk");
+if (!require("fs").existsSync(apkDir)) require("fs").mkdirSync(apkDir);
+app.use("/apk", express.static(apkDir));
 
 app.get("/", (_, res) => res.sendFile(path.join(__dirname, "index.html")));
 
