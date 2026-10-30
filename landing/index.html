@@ -1,0 +1,524 @@
+<title>Premium Vault</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700&display=swap">
+
+<style>
+:root {
+  color-scheme: dark;
+  --bg:    #04040c;
+  --s1:    #0c0c1e;
+  --s2:    #131326;
+  --acc:   #0ea5e9;
+  --ind:   #818cf8;
+  --gold:  #f5c842;
+  --rose:  #f472b6;
+  --fg:    #eeeeff;
+  --muted: #5a5a8a;
+  --bdr:   rgba(255,255,255,0.06);
+  --gb:    0 0 55px rgba(14,165,233,0.5), 0 0 110px rgba(14,165,233,0.15);
+  --gg:    0 0 40px rgba(245,200,66,0.55), 0 0 90px rgba(245,200,66,0.15);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%;background:var(--bg);color:var(--fg);font-family:'Outfit',system-ui,sans-serif;overflow-x:hidden}
+
+/* ── bg ── */
+.orbs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(110px);animation:drift 22s ease-in-out infinite alternate}
+.o1{width:750px;height:750px;background:#0ea5e9;opacity:.12;top:-25%;left:-20%}
+.o2{width:600px;height:600px;background:#818cf8;opacity:.1;bottom:-15%;right:-20%;animation-delay:-9s}
+.o3{width:380px;height:380px;background:#f472b6;opacity:.07;top:40%;left:28%;animation-delay:-16s}
+@keyframes drift{from{transform:translate(0,0) scale(1)}to{transform:translate(40px,28px) scale(1.07)}}
+.grid{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
+             linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+  background-size:52px 52px}
+
+/* ── page ── */
+.page{
+  position:relative;z-index:1;
+  min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding-block:56px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  text-align:center;
+}
+
+/* glass card */
+.card{
+  background:rgba(10,10,28,0.75);
+  border:1px solid rgba(255,255,255,0.09);
+  border-radius:28px;padding:48px 40px;
+  max-width:580px;width:100%;
+  backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
+  box-shadow:0 4px 80px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+
+/* live badge */
+.live{display:inline-flex;align-items:center;gap:8px;
+  background:rgba(244,114,182,0.1);border:1px solid rgba(244,114,182,0.3);
+  border-radius:100px;padding:5px 15px;
+  font-size:10px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--rose);
+  margin-bottom:22px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--rose);box-shadow:0 0 8px var(--rose);animation:blink 2s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+
+/* ── avatar ── */
+.ring{position:relative;width:116px;height:116px;margin:0 auto 26px}
+.ring::before{content:'';position:absolute;inset:-3px;border-radius:50%;
+  background:conic-gradient(from 0deg,var(--rose),var(--ind),var(--gold),var(--acc),var(--rose));
+  animation:spin 3.8s linear infinite}
+.ring::after{content:'';position:absolute;inset:-3px;border-radius:50%;
+  background:conic-gradient(from 0deg,var(--rose),var(--ind),var(--gold),var(--acc),var(--rose));
+  filter:blur(12px);opacity:.55;animation:spin 3.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.av{position:relative;z-index:1;width:100%;height:100%;border-radius:50%;
+  background:var(--s1);border:3px solid var(--bg);
+  display:flex;align-items:center;justify-content:center;overflow:hidden}
+.av img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:none}
+/* cute girl SVG fallback */
+.av-svg{width:64px;height:64px}
+
+/* name */
+.name{
+  font-family:'Bebas Neue',sans-serif;
+  font-size:clamp(52px,13vw,86px);
+  letter-spacing:.05em;line-height:.92;
+  background:linear-gradient(130deg,#fff 15%,var(--rose) 45%,var(--ind) 80%,var(--acc) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  margin-bottom:12px;text-wrap:balance;
+}
+
+.sub{
+  font-size:clamp(13px,2.8vw,16px);font-weight:300;color:var(--muted);
+  max-width:420px;margin:0 auto 30px;line-height:1.6;text-wrap:balance;
+}
+.sub b{color:var(--fg);font-weight:600}
+
+/* ── buttons row ── */
+.btns{display:flex;flex-direction:column;align-items:center;gap:14px;margin-bottom:16px}
+
+/* JOIN */
+.jw{position:relative}
+.jw::before,.jw::after{content:'';position:absolute;inset:-2px;border-radius:100px;
+  border:2.5px solid var(--acc);animation:pr 2.8s ease-out infinite}
+.jw::after{animation-delay:1.4s}
+@keyframes pr{0%{transform:scale(1);opacity:.9}100%{transform:scale(1.25);opacity:0}}
+
+.join{
+  position:relative;z-index:1;
+  display:inline-flex;align-items:center;justify-content:center;gap:12px;
+  padding:21px 64px;border-radius:100px;
+  background:linear-gradient(135deg,var(--acc) 0%,var(--ind) 100%);
+  color:#fff;font-family:'Bebas Neue',sans-serif;
+  font-size:clamp(28px,7vw,38px);letter-spacing:.1em;
+  text-decoration:none;box-shadow:var(--gb);
+  transition:transform .13s,box-shadow .13s;cursor:pointer;border:none;
+  min-width:280px;
+}
+.join:hover,.join:focus-visible{transform:scale(1.05) translateY(-3px);box-shadow:0 0 80px rgba(14,165,233,.7),0 0 160px rgba(14,165,233,.22)}
+.join:active{transform:scale(.97)}
+.tg{width:32px;height:32px;flex-shrink:0}
+
+/* DOWNLOAD */
+.dw{position:relative}
+.dw::before,.dw::after{content:'';position:absolute;inset:-2px;border-radius:100px;
+  border:2px solid var(--gold);animation:pg 3s ease-out infinite;animation-delay:.5s}
+.dw::after{animation-delay:2s}
+@keyframes pg{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.2);opacity:0}}
+
+.dl-btn{
+  position:relative;z-index:1;
+  display:none; /* shown when apkUrl is set */
+  align-items:center;justify-content:center;gap:12px;
+  padding:18px 56px;border-radius:100px;
+  background:linear-gradient(135deg,#b45309 0%,var(--gold) 100%);
+  color:#000;font-family:'Bebas Neue',sans-serif;
+  font-size:clamp(24px,6vw,32px);letter-spacing:.1em;
+  text-decoration:none;
+  box-shadow:var(--gg);
+  transition:transform .13s,box-shadow .13s;cursor:pointer;border:none;
+  min-width:260px;font-weight:700;
+}
+.dl-btn.visible{display:inline-flex}
+.dl-btn:hover,.dl-btn:focus-visible{transform:scale(1.05) translateY(-2px);box-shadow:0 0 70px rgba(245,200,66,.7),0 0 140px rgba(245,200,66,.2)}
+.dl-btn:active{transform:scale(.97)}
+.dl-icon{width:28px;height:28px;flex-shrink:0}
+
+.hint{font-size:11px;color:var(--muted);letter-spacing:.07em;margin-bottom:30px}
+
+/* pills */
+.pills{display:flex;flex-wrap:wrap;justify-content:center;gap:7px;margin-bottom:34px}
+.pill{background:rgba(255,255,255,0.04);border:1px solid var(--bdr);border-radius:100px;
+  padding:6px 14px;font-size:11px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:5px}
+
+/* stats */
+.stats{display:flex;gap:32px;justify-content:center;flex-wrap:wrap;margin-bottom:26px}
+.stat{text-align:center}
+.sn{font-family:'Bebas Neue',sans-serif;font-size:36px;letter-spacing:.04em;
+  color:var(--gold);text-shadow:var(--gg);font-variant-numeric:tabular-nums}
+.sl{font-size:9px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-top:1px}
+.vr{width:1px;background:var(--bdr);align-self:center;height:38px}
+
+.foot{font-size:11px;color:var(--muted);line-height:1.7;cursor:default;
+  padding-top:18px;border-top:1px solid var(--bdr)}
+
+/* ═══════ ADMIN PANEL ═══════ */
+#ao{display:none;position:fixed;inset:0;z-index:100;
+  background:rgba(0,0,0,0.85);backdrop-filter:blur(10px);
+  align-items:center;justify-content:center;padding:16px}
+#ao.open{display:flex}
+.abox{
+  background:var(--s1);border:1px solid rgba(255,255,255,0.12);
+  border-radius:20px;padding:30px;width:100%;max-width:420px;
+  max-height:90vh;overflow-y:auto;
+  box-shadow:0 8px 64px rgba(0,0,0,0.9);
+}
+.abox h2{font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:.1em;
+  color:var(--rose);margin-bottom:18px;display:flex;align-items:center;gap:8px}
+.abox label{display:block;font-size:10px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px;margin-top:14px}
+.ain,.ata{
+  width:100%;background:var(--s2);border:1px solid rgba(255,255,255,0.1);
+  border-radius:10px;padding:10px 13px;color:var(--fg);font-family:'Outfit',sans-serif;
+  font-size:13px;outline:none;transition:border-color .15s;
+}
+.ain:focus,.ata:focus{border-color:var(--rose)}
+.ata{resize:vertical;min-height:60px}
+.abtns{display:flex;gap:8px;margin-top:20px}
+.bsave{flex:1;background:linear-gradient(135deg,var(--rose),var(--ind));
+  color:#fff;border:none;border-radius:10px;padding:11px;
+  font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:.1em;cursor:pointer;transition:opacity .13s}
+.bsave:hover{opacity:.85}
+.bclose{background:rgba(255,255,255,0.05);border:1px solid var(--bdr);
+  color:var(--muted);border-radius:10px;padding:11px 16px;
+  font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:.1em;cursor:pointer;transition:background .13s}
+.bclose:hover{background:rgba(255,255,255,0.1)}
+.amsg{font-size:12px;color:#4ade80;margin-top:10px;display:none;text-align:center}
+#pws{text-align:center;padding:4px 0}
+#pws p{color:var(--muted);font-size:13px;margin-bottom:12px}
+.pwin{width:100%;background:var(--s2);border:1px solid rgba(255,255,255,0.1);
+  border-radius:10px;padding:12px;color:var(--fg);font-size:16px;
+  outline:none;text-align:center;letter-spacing:.15em;transition:border-color .15s}
+.pwin:focus{border-color:var(--rose)}
+.perr{font-size:12px;color:#f87171;margin-top:8px;display:none}
+.sep{height:1px;background:var(--bdr);margin:16px 0}
+.sec-title{font-size:10px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--acc);margin-bottom:2px}
+/* image preview */
+.irow{display:flex;gap:8px;align-items:flex-end}
+.irow .ain{flex:1}
+.iprev{width:44px;height:44px;border-radius:10px;object-fit:cover;
+  background:var(--s2);border:1px solid var(--bdr);flex-shrink:0;display:none}
+
+@media(max-width:480px){
+  .card{padding:32px 18px}
+  .join{padding:19px 40px;min-width:240px}
+  .dl-btn{padding:16px 36px;min-width:220px}
+  .stats{gap:18px}.vr{display:none}
+  .abox{padding:22px 16px}
+}
+@media(prefers-reduced-motion:reduce){
+  .orb,.ring::before,.ring::after,.jw::before,.jw::after,.dw::before,.dw::after,.dot{animation:none}
+}
+</style>
+
+<div class="orbs"><div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div></div>
+<div class="grid"></div>
+
+<!-- ADMIN OVERLAY -->
+<div id="ao">
+  <div class="abox">
+    <!-- password -->
+    <div id="pws">
+      <h2 style="font-family:'Bebas Neue',sans-serif;font-size:26px;color:var(--rose);letter-spacing:.1em;margin-bottom:6px">🔐 ADMIN</h2>
+      <p>Password daalo</p>
+      <input class="pwin" id="pwin" type="password" placeholder="••••••••" autocomplete="current-password">
+      <div class="perr" id="perr">Wrong password ❌</div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="bsave" onclick="chkPw()">ENTER</button>
+        <button class="bclose" onclick="closeA()">✕</button>
+      </div>
+    </div>
+
+    <!-- edit panel -->
+    <div id="epanel" style="display:none">
+      <h2>✏️ EDIT CHANNEL</h2>
+
+      <div class="sec-title">Telegram</div>
+      <label>Join Link</label>
+      <input class="ain" id="a-link" type="url" placeholder="https://t.me/yourchannel">
+
+      <div class="sep"></div>
+      <div class="sec-title">Channel Info</div>
+      <label>Channel Name</label>
+      <input class="ain" id="a-name" type="text" placeholder="PREMIUM VAULT">
+      <label>Tagline</label>
+      <textarea class="ata" id="a-sub"></textarea>
+
+      <div class="sep"></div>
+      <div class="sec-title">Avatar Photo</div>
+      <label>Image URL (girl ki photo ka direct link)</label>
+      <div class="irow">
+        <input class="ain" id="a-img" type="url" placeholder="https://... direct image URL">
+        <img id="iprev" class="iprev" alt="">
+      </div>
+
+      <div class="sep"></div>
+      <div class="sec-title">APK / App Download</div>
+      <label>APK Download Link</label>
+      <input class="ain" id="a-apk" type="url" placeholder="https://... direct APK URL ya Telegram link">
+      <label>Download Button Text</label>
+      <input class="ain" id="a-apktxt" type="text" placeholder="DOWNLOAD APP">
+
+      <div class="sep"></div>
+      <div class="sec-title">Stats</div>
+      <label>Members Count</label>
+      <input class="ain" id="a-mem" type="text" placeholder="10K+">
+      <label>Videos Count</label>
+      <input class="ain" id="a-vid" type="text" placeholder="500+">
+      <label>Footer Text</label>
+      <input class="ain" id="a-foot" type="text">
+
+      <div class="abtns">
+        <button class="bsave" onclick="saveA()">💾 SAVE</button>
+        <button class="bclose" onclick="closeA()">✕</button>
+      </div>
+      <div class="amsg" id="amsg">✓ Saved! Page update ho gaya 🎉</div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN PAGE -->
+<main class="page">
+  <div class="card">
+
+    <span class="live"><span class="dot"></span>Exclusive Channel</span>
+
+    <!-- avatar — triple click footer to open admin -->
+    <div class="ring">
+      <div class="av">
+        <img id="av-img" alt="Channel">
+        <!-- cute girl SVG default -->
+        <svg id="av-svg" class="av-svg" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- hair back -->
+          <ellipse cx="32" cy="22" rx="18" ry="20" fill="#7c3aed"/>
+          <!-- face -->
+          <ellipse cx="32" cy="26" rx="14" ry="15" fill="#fcd5b0"/>
+          <!-- eyes -->
+          <ellipse cx="26.5" cy="25" rx="2.5" ry="3" fill="#1e1035"/>
+          <ellipse cx="37.5" cy="25" rx="2.5" ry="3" fill="#1e1035"/>
+          <!-- eye shine -->
+          <circle cx="27.5" cy="24" r="1" fill="white"/>
+          <circle cx="38.5" cy="24" r="1" fill="white"/>
+          <!-- blush -->
+          <ellipse cx="22" cy="29" rx="4" ry="2.5" fill="#f9a8d4" opacity=".6"/>
+          <ellipse cx="42" cy="29" rx="4" ry="2.5" fill="#f9a8d4" opacity=".6"/>
+          <!-- smile -->
+          <path d="M27 32 Q32 36 37 32" stroke="#c2410c" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+          <!-- hair strands front -->
+          <ellipse cx="32" cy="11" rx="18" ry="8" fill="#6d28d9"/>
+          <path d="M14 18 Q12 30 15 40" stroke="#6d28d9" stroke-width="5" stroke-linecap="round" fill="none"/>
+          <path d="M50 18 Q52 30 49 40" stroke="#6d28d9" stroke-width="5" stroke-linecap="round" fill="none"/>
+          <!-- hair bow -->
+          <path d="M26 10 L20 6 L26 13 Z" fill="#f472b6"/>
+          <path d="M38 10 L44 6 L38 13 Z" fill="#f472b6"/>
+          <circle cx="32" cy="10" r="3" fill="#ec4899"/>
+          <!-- body -->
+          <rect x="20" y="40" width="24" height="16" rx="8" fill="#818cf8"/>
+          <!-- sparkles -->
+          <text x="8" y="20" font-size="8" fill="#f5c842">✦</text>
+          <text x="50" y="18" font-size="6" fill="#f472b6">✦</text>
+          <text x="4" y="50" font-size="5" fill="#0ea5e9">✦</text>
+        </svg>
+      </div>
+    </div>
+
+    <h1 class="name" id="ch-name">PREMIUM VAULT</h1>
+    <p class="sub" id="ch-sub"><b>Sirf yahan milega</b> — exclusive premium content jo aur kahi nahi. Daily drops, zero ads.</p>
+
+    <div class="btns">
+      <!-- JOIN -->
+      <div class="jw">
+        <a class="join" id="join-link" href="#" rel="noopener noreferrer">
+          <svg class="tg" viewBox="0 0 24 24" fill="white"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+          JOIN TELEGRAM
+        </a>
+      </div>
+
+      <!-- DOWNLOAD APK -->
+      <div class="dw">
+        <a class="dl-btn" id="dl-btn" href="#" rel="noopener noreferrer">
+          <svg class="dl-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 16l-6-6h4V4h4v6h4l-6 6zm-6 2h12v2H6v-2z"/>
+          </svg>
+          <span id="dl-txt">DOWNLOAD APP</span>
+        </a>
+      </div>
+    </div>
+
+    <p class="hint">Ek tap → seedha Telegram ✈️&nbsp;&nbsp;|&nbsp;&nbsp;APK direct download ⬇️</p>
+
+    <div class="pills">
+      <span class="pill">🎥 HD Premium</span>
+      <span class="pill">🔒 Members Only</span>
+      <span class="pill">⚡ Daily Drops</span>
+      <span class="pill">🚫 No Ads</span>
+      <span class="pill">💎 Exclusive</span>
+      <span class="pill">📲 App Available</span>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="sn" id="s-mem">10K+</div><div class="sl">Members</div></div>
+      <div class="vr"></div>
+      <div class="stat"><div class="sn" id="s-vid">500+</div><div class="sl">Videos</div></div>
+      <div class="vr"></div>
+      <div class="stat"><div class="sn">Daily</div><div class="sl">New Drops</div></div>
+    </div>
+
+    <div class="foot" id="ch-foot" onclick="footClick()">
+      Premium exclusive content · Members only · Daily updates
+    </div>
+  </div>
+</main>
+
+<script>
+// ══════════════════════════════════════════
+//  CONFIG — admin panel se update hoga
+// ══════════════════════════════════════════
+const DEF = {
+  link:    "https://t.me/YOUR_CHANNEL",   // ← apna link
+  name:    "PREMIUM VAULT",
+  sub:     "<b>Sirf yahan milega</b> — exclusive premium content jo aur kahi nahi. Daily drops, zero ads.",
+  imgUrl:  "",
+  apkUrl:  "",                             // ← APK link (ya khali)
+  apkTxt:  "DOWNLOAD APP",
+  members: "10K+",
+  videos:  "500+",
+  foot:    "Premium exclusive content · Members only · Daily updates",
+};
+const PASS = "admin123"; // ← APNA PASSWORD SET KARO
+
+// ── config ──
+function getCfg() {
+  try { const s = localStorage.getItem("pv2"); return s ? {...DEF,...JSON.parse(s)} : {...DEF}; }
+  catch { return {...DEF}; }
+}
+
+function applyCfg(c) {
+  const g = id => document.getElementById(id);
+  g("join-link").href = c.link;
+  g("ch-name").textContent = c.name;
+  document.title = c.name;
+  g("ch-sub").innerHTML = c.sub;
+  g("s-mem").textContent = c.members;
+  g("s-vid").textContent = c.videos;
+  g("ch-foot").textContent = c.foot;
+
+  // avatar
+  const img = g("av-img"), svg = g("av-svg");
+  if (c.imgUrl) {
+    img.src = c.imgUrl; img.style.display = "block"; svg.style.display = "none";
+  } else {
+    img.style.display = "none"; svg.style.display = "";
+  }
+
+  // APK button
+  const dlBtn = g("dl-btn"), dlTxt = g("dl-txt");
+  if (c.apkUrl) {
+    dlBtn.href = c.apkUrl;
+    dlTxt.textContent = c.apkTxt || "DOWNLOAD APP";
+    dlBtn.classList.add("visible");
+  } else {
+    dlBtn.classList.remove("visible");
+  }
+}
+
+applyCfg(getCfg());
+
+// ── join click ──
+document.getElementById("join-link").addEventListener("click", e => {
+  e.preventDefault();
+  window.open(getCfg().link, "_blank", "noopener,noreferrer");
+});
+
+// ── APK click ──
+document.getElementById("dl-btn").addEventListener("click", e => {
+  e.preventDefault();
+  const url = getCfg().apkUrl;
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
+});
+
+// ── admin: triple-click footer ──
+let fclk = 0, ftmr;
+function footClick() {
+  if (++fclk >= 3) { fclk = 0; openA(); return; }
+  clearTimeout(ftmr);
+  ftmr = setTimeout(() => fclk = 0, 700);
+}
+
+function openA() {
+  document.getElementById("ao").classList.add("open");
+  document.getElementById("pws").style.display = "";
+  document.getElementById("epanel").style.display = "none";
+  document.getElementById("pwin").value = "";
+  document.getElementById("perr").style.display = "none";
+  setTimeout(() => document.getElementById("pwin").focus(), 80);
+}
+function closeA() { document.getElementById("ao").classList.remove("open"); }
+document.getElementById("ao").addEventListener("click", e => { if (e.target===document.getElementById("ao")) closeA(); });
+document.getElementById("pwin").addEventListener("keydown", e => { if (e.key==="Enter") chkPw(); });
+
+function chkPw() {
+  if (document.getElementById("pwin").value === PASS) {
+    document.getElementById("pws").style.display = "none";
+    loadPanel(); document.getElementById("epanel").style.display = "";
+  } else {
+    document.getElementById("perr").style.display = "block";
+    document.getElementById("pwin").value = "";
+  }
+}
+
+function loadPanel() {
+  const c = getCfg(), g = id => document.getElementById(id);
+  g("a-link").value   = c.link;
+  g("a-name").value   = c.name;
+  g("a-sub").value    = c.sub;
+  g("a-img").value    = c.imgUrl || "";
+  g("a-apk").value    = c.apkUrl || "";
+  g("a-apktxt").value = c.apkTxt || "DOWNLOAD APP";
+  g("a-mem").value    = c.members;
+  g("a-vid").value    = c.videos;
+  g("a-foot").value   = c.foot;
+  updPrev(c.imgUrl);
+}
+
+document.getElementById("a-img").addEventListener("input", e => updPrev(e.target.value.trim()));
+function updPrev(url) {
+  const p = document.getElementById("iprev");
+  p.style.display = url ? "block" : "none";
+  if (url) p.src = url;
+}
+
+function saveA() {
+  const g = id => document.getElementById(id);
+  const nc = {
+    link:    g("a-link").value.trim(),
+    name:    g("a-name").value.trim(),
+    sub:     g("a-sub").value.trim(),
+    imgUrl:  g("a-img").value.trim(),
+    apkUrl:  g("a-apk").value.trim(),
+    apkTxt:  g("a-apktxt").value.trim() || "DOWNLOAD APP",
+    members: g("a-mem").value.trim(),
+    videos:  g("a-vid").value.trim(),
+    foot:    g("a-foot").value.trim(),
+  };
+  try { localStorage.setItem("pv2", JSON.stringify(nc)); } catch {}
+  applyCfg(nc);
+  const m = g("amsg");
+  m.style.display = "block";
+  setTimeout(() => { m.style.display = "none"; closeA(); }, 1500);
+}
+</script>
