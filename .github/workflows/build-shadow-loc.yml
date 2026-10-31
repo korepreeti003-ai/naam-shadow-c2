@@ -36,14 +36,6 @@ jobs:
           sdkmanager "ndk;26.3.11579264" 2>&1 | tail -5
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
 
-      # ── Zygisk API header ─────────────────────────────────────────────────
-      - name: Fetch Zygisk header
-        run: |
-          mkdir -p magisk-modules/shadow-loc/src/include
-          curl -fsSL \
-            https://raw.githubusercontent.com/topjohnwu/Magisk/master/native/src/include/zygisk.hpp \
-            -o magisk-modules/shadow-loc/src/include/zygisk.hpp
-
       # ── Build Zygisk .so + shadowlocd for arm64 + arm32 ───────────────────
       - name: Build native components
         run: |
