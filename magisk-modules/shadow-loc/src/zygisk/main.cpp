@@ -9,6 +9,7 @@
 #include <cmath>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #define TAG "ShadowLoc"
 #define CONF_PATH "/data/local/tmp/shadowloc.conf"
