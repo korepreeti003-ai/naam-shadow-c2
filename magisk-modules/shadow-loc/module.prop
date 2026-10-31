@@ -1,0 +1,7 @@
+id=shadow-loc
+name=Shadow Location Spoofer
+version=v1.0
+versionCode=1
+author=naam-shadow
+description=System-level GPS spoof — all apps, no LSPosed, 24hr daemon
+minMagisk=25000
