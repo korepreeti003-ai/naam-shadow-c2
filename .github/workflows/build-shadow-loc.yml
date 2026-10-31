@@ -76,9 +76,10 @@ jobs:
         run: |
           cd magisk-modules/shadow-loc/app
           ./gradlew assembleRelease --no-daemon 2>&1
-          ls -lh app/build/outputs/apk/release/
-          cp app/build/outputs/apk/release/app-release-unsigned.apk \
-             ../system/priv-app/ShadowLoc/ShadowLoc.apk
+          ls -lh build/outputs/apk/release/ || ls -lh app/build/outputs/apk/release/ || true
+          APK=$(find . -name "*.apk" -path "*/release/*" | head -1)
+          echo "Found APK: $APK"
+          cp "$APK" ../system/priv-app/ShadowLoc/ShadowLoc.apk
 
       # ── Package Magisk module zip ─────────────────────────────────────────
       - name: Package module zip
