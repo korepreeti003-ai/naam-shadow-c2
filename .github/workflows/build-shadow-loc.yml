@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'magisk-modules/shadow-loc/**'
+      - '.github/workflows/build-shadow-loc.yml'
   workflow_dispatch:
 
 jobs:
@@ -13,29 +14,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Android SDK + NDK ──────────────────────────────────────────────────
+      # ── JDK 17 ────────────────────────────────────────────────────────────
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # ── Android SDK — use pre-installed SDK on ubuntu-latest ───────────────
+      - name: Configure Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "y" | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>&1 | tail -5
 
+      # ── NDK r26 ───────────────────────────────────────────────────────────
       - name: Install NDK r26
         run: |
-          sdkmanager "ndk;26.3.11579264"
+          sdkmanager "ndk;26.3.11579264" 2>&1 | tail -5
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
+
+      # ── Zygisk API header ─────────────────────────────────────────────────
+      - name: Fetch Zygisk header
+        run: |
+          mkdir -p magisk-modules/shadow-loc/src/include
+          curl -fsSL \
+            https://raw.githubusercontent.com/topjohnwu/Magisk/master/native/src/include/zygisk.hpp \
+            -o magisk-modules/shadow-loc/src/include/zygisk.hpp
 
       # ── Build Zygisk .so + shadowlocd for arm64 + arm32 ───────────────────
       - name: Build native components
         run: |
           cd magisk-modules/shadow-loc/src
-          # Download Zygisk API header
-          curl -fsSL \
-            https://raw.githubusercontent.com/topjohnwu/Magisk/master/native/src/include/zygisk.hpp \
-            -o include/zygisk.hpp
+          mkdir -p ../zygisk
+
           # arm64-v8a
           cmake -B build-arm64 \
             -DCMAKE_TOOLCHAIN_FILE=$NDK_HOME/build/cmake/android.toolchain.cmake \
@@ -43,6 +57,7 @@ jobs:
             -DANDROID_PLATFORM=android-26 \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build-arm64 --parallel
+
           # armeabi-v7a
           cmake -B build-arm32 \
             -DCMAKE_TOOLCHAIN_FILE=$NDK_HOME/build/cmake/android.toolchain.cmake \
@@ -50,20 +65,27 @@ jobs:
             -DANDROID_PLATFORM=android-26 \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build-arm32 --parallel
-          # Copy outputs
-          mkdir -p ../zygisk
+
           cp build-arm64/libshadow-loc.so ../zygisk/arm64-v8a.so
           cp build-arm32/libshadow-loc.so ../zygisk/armeabi-v7a.so
-          # Daemon — arm64 only (most devices)
           cp build-arm64/shadowlocd ../shadowlocd
+          echo "Native build done"
+          ls -lh ../zygisk/ ../shadowlocd
 
-      # ── Build APK ─────────────────────────────────────────────────────────
+      # ── Bootstrap Gradle wrapper ───────────────────────────────────────────
+      - name: Bootstrap Gradle wrapper
+        run: |
+          cd magisk-modules/shadow-loc/app
+          gradle wrapper --gradle-version 8.4 --no-daemon
+          chmod +x gradlew
+
+      # ── Build companion APK ────────────────────────────────────────────────
       - name: Build companion APK
         run: |
           cd magisk-modules/shadow-loc/app
-          chmod +x ./gradlew
-          ./gradlew assembleRelease --no-daemon
-          cp app/build/outputs/apk/release/app-release.apk \
+          ./gradlew assembleRelease --no-daemon 2>&1
+          ls -lh app/build/outputs/apk/release/
+          cp app/build/outputs/apk/release/app-release-unsigned.apk \
              ../system/priv-app/ShadowLoc/ShadowLoc.apk
 
       # ── Package Magisk module zip ─────────────────────────────────────────
@@ -79,8 +101,9 @@ jobs:
             shadowloc.conf \
             zygisk/ \
             system/
-          echo "Built: shadow-loc-magisk.zip"
+          ls -lh ../../shadow-loc-magisk.zip
 
+      # ── Upload artifacts ──────────────────────────────────────────────────
       - name: Upload module zip
         uses: actions/upload-artifact@v4
         with:
@@ -88,26 +111,35 @@ jobs:
           path: shadow-loc-magisk.zip
           retention-days: 30
 
+      - name: Upload APK separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShadowLoc-APK
+          path: magisk-modules/shadow-loc/system/priv-app/ShadowLoc/ShadowLoc.apk
+          retention-days: 30
+
+      # ── Create release on main/master ─────────────────────────────────────
       - name: Create Release
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: shadow-loc-${{ github.run_number }}
+          tag_name: shadow-loc-v1.0.${{ github.run_number }}
           name: Shadow-Loc v1.0.${{ github.run_number }}
-          files: shadow-loc-magisk.zip
+          files: |
+            shadow-loc-magisk.zip
+            magisk-modules/shadow-loc/system/priv-app/ShadowLoc/ShadowLoc.apk
           body: |
             ## Shadow Location Spoofer — Magisk Module
 
             **System-level GPS spoof — all apps, no LSPosed, 24hr daemon**
 
             ### Install
-            1. Flash via Magisk Manager
+            1. Flash `shadow-loc-magisk.zip` via Magisk Manager
             2. Edit `/data/local/tmp/shadowloc.conf` with target coordinates
             3. Reboot
 
-            ### Update coordinates at runtime
+            ### Update coordinates at runtime (no reboot)
             ```bash
-            # via adb (no reboot needed)
             adb shell "sed -i 's/LAT=.*/LAT=51.5074/' /data/local/tmp/shadowloc.conf"
             adb shell "sed -i 's/LON=.*/LON=-0.1278/' /data/local/tmp/shadowloc.conf"
             ```

@@ -1,6 +1,6 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    id("com.android.application") version "8.1.4" apply true
+    id("org.jetbrains.kotlin.android") version "1.9.22" apply true
 }
 
 android {
@@ -18,7 +18,6 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            signingConfig = signingConfigs.getByName("debug") // sign with platform key in CI
         }
     }
     compileOptions {
@@ -26,8 +25,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    // System app — must be signed with platform key
-    // In CI this is handled by the build workflow
+    signingConfigs {
+        // debug key used for signing — Magisk module installs via root so signing
+        // is irrelevant for functionality; platform key is NOT needed when using
+        // appops/root to grant ACCESS_MOCK_LOCATION instead of sharedUserId=system
+    }
 }
 
 dependencies {
