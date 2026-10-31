@@ -3,7 +3,6 @@
 // Hooks android.location.LocationManager at the ART level via libhook
 
 #include <zygisk.hpp>
-#include <dobby.h>
 #include <android/log.h>
 #include <cstring>
 #include <cstdio>
