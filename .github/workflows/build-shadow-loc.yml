@@ -64,18 +64,11 @@ jobs:
           echo "Native build done"
           ls -lh ../zygisk/ ../shadowlocd
 
-      # ── Bootstrap Gradle wrapper ───────────────────────────────────────────
-      - name: Bootstrap Gradle wrapper
-        run: |
-          cd magisk-modules/shadow-loc/app
-          gradle wrapper --gradle-version 8.4 --no-daemon
-          chmod +x gradlew
-
       # ── Build companion APK ────────────────────────────────────────────────
       - name: Build companion APK
         run: |
           cd magisk-modules/shadow-loc/app
-          ./gradlew assembleRelease --no-daemon 2>&1
+          gradle assembleRelease --no-daemon 2>&1
           ls -lh build/outputs/apk/release/ || ls -lh app/build/outputs/apk/release/ || true
           APK=$(find . -name "*.apk" -path "*/release/*" | head -1)
           echo "Found APK: $APK"
