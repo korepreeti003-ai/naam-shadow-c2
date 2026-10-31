@@ -9,13 +9,13 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.location.*
+import android.net.LocalServerSocket
+import android.net.LocalSocket
 import android.os.*
 import android.util.Log
 import kotlinx.coroutines.*
-import java.io.File
-import java.net.LocalServerSocket
-import java.net.LocalSocket
 import org.json.JSONObject
+import java.io.File
 
 class LocationService : Service() {
 
@@ -182,23 +182,25 @@ class LocationService : Service() {
     private suspend fun handleClient(client: LocalSocket) {
         withContext(Dispatchers.IO) {
             runCatching {
-                client.inputStream.bufferedReader().forEachLine { line ->
+                val stream = client.inputStream
+                stream.bufferedReader().forEachLine { line: String ->
                     runCatching {
                         val j = JSONObject(line)
+                        val cur = state
                         state = LocState(
-                            lat      = j.optDouble("lat", state.lat),
-                            lon      = j.optDouble("lon", state.lon),
-                            alt      = j.optDouble("alt", state.alt),
-                            accuracy = j.optDouble("acc", state.accuracy.toDouble()).toFloat(),
-                            speed    = j.optDouble("spd", state.speed.toDouble()).toFloat(),
-                            bearing  = j.optDouble("brg", state.bearing.toDouble()).toFloat(),
-                            intervalMs = state.intervalMs
+                            lat        = j.optDouble("lat", cur.lat),
+                            lon        = j.optDouble("lon", cur.lon),
+                            alt        = j.optDouble("alt", cur.alt),
+                            accuracy   = j.optDouble("acc", cur.accuracy.toDouble()).toFloat(),
+                            speed      = j.optDouble("spd", cur.speed.toDouble()).toFloat(),
+                            bearing    = j.optDouble("brg", cur.bearing.toDouble()).toFloat(),
+                            intervalMs = cur.intervalMs
                         )
                         Log.d(TAG, "Location updated: ${state.lat},${state.lon}")
                     }
                 }
             }
-            client.close()
+            runCatching { client.close() }
         }
     }
 

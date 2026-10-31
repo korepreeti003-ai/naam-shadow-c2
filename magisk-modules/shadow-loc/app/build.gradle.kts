@@ -24,7 +24,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
     signingConfigs {
         // debug key used for signing — Magisk module installs via root so signing
         // is irrelevant for functionality; platform key is NOT needed when using
@@ -34,5 +38,5 @@ android {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("org.json:json:20231013")
+    // org.json is provided by Android SDK — no standalone dep needed
 }
