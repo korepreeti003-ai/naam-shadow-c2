@@ -250,7 +250,7 @@ const messageWorker = new Worker<MessageJobData>(
       return;
     }
 
-    const result = await dispatchSms(fcmToken, messageId, campaignId, phone, text, projectId);
+    const result = await dispatchSms(fcmToken, messageId, campaignId, phone, text, projectId, deviceId);
 
     const now = new Date().toISOString();
     const msgRef = db.collection(COLLECTIONS.MESSAGES).doc(messageId);

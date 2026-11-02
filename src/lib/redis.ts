@@ -25,4 +25,5 @@ export const QUEUE_NAMES = {
   CAMPAIGN: 'campaign-processor',
   MESSAGE: 'message-dispatcher',
   DEVICE_PING: 'device-ping',
+  SMS_EVENTS: 'sms-events',
 } as const;

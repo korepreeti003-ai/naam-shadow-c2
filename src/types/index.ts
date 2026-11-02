@@ -254,6 +254,43 @@ export interface FcmDeviceStatusUpdate {
 
 export type FcmPayload = FcmSmsPayload | FcmDevicePingPayload | FcmDeviceStatusUpdate;
 
+// ─── SMS Manager ──────────────────────────────────────────────────────────
+
+export type SmsEventStatus = 'intercepted' | 'simulated' | 'blocked' | 'forwarded';
+
+export interface SmsEvent {
+  id: string;
+  messageId?: string;
+  campaignId?: string;
+  deviceId?: string;
+  to: string;
+  body: string;
+  timestamp: string;
+  status: SmsEventStatus;
+  simulatedResponse?: SmsSimulatedResponse;
+  telegramNotified?: boolean;
+  telegramError?: string;
+}
+
+export interface SmsSimulatedResponse {
+  success: boolean;
+  messageId: string;
+  status: 'sent' | 'failed' | 'pending';
+  errorCode?: string;
+  errorMessage?: string;
+  deliveryDelayMs?: number;
+}
+
+export interface SmsManagerConfig {
+  enabled: boolean;
+  blockActualSend: boolean;
+  defaultResponse: SmsSimulatedResponse;
+  phoneOverrides: Record<string, SmsSimulatedResponse>;
+  telegramEnabled: boolean;
+  telegramChatId?: string;
+  notifyOnCapture: boolean;
+}
+
 // ─── CSV Upload ───────────────────────────────────────────────────────────
 
 export interface CsvRow {
