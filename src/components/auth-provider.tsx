@@ -1,11 +1,7 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
-import {
-  getClientAuthInstance,
-  onAuthStateChanged,
-  type User,
-} from '@/lib/firebase-client';
+import { createContext, useContext } from 'react';
+import type { User } from '@/lib/firebase-client';
 import type { AppUser } from '@/types';
 
 interface AuthContextValue {
@@ -15,48 +11,31 @@ interface AuthContextValue {
   idToken: string | null;
 }
 
+const MOCK_USER = {
+  uid: 'panel-admin',
+  email: 'admin@panel.local',
+  displayName: 'Admin',
+  emailVerified: true,
+  getIdToken: async () => '',
+} as unknown as User;
+
+const MOCK_APP_USER: AppUser = {
+  uid: 'panel-admin',
+  email: 'admin@panel.local',
+  role: 'admin',
+  createdAt: new Date().toISOString(),
+};
+
 const AuthContext = createContext<AuthContextValue>({
-  user: null,
-  appUser: null,
-  loading: true,
+  user: MOCK_USER,
+  appUser: MOCK_APP_USER,
+  loading: false,
   idToken: null,
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [appUser, setAppUser] = useState<AppUser | null>(null);
-  const [idToken, setIdToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const auth = getClientAuthInstance();
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
-      if (firebaseUser) {
-        const token = await firebaseUser.getIdToken();
-        setIdToken(token);
-        try {
-          const res = await fetch('/api/auth/me', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            setAppUser(data.data);
-          }
-        } catch {
-          // continue without app user details
-        }
-      } else {
-        setIdToken(null);
-        setAppUser(null);
-      }
-      setLoading(false);
-    });
-    return unsubscribe;
-  }, []);
-
   return (
-    <AuthContext.Provider value={{ user, appUser, loading, idToken }}>
+    <AuthContext.Provider value={{ user: MOCK_USER, appUser: MOCK_APP_USER, loading: false, idToken: null }}>
       {children}
     </AuthContext.Provider>
   );

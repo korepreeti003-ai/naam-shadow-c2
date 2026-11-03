@@ -1,9 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  experimental: {
-    serverComponentsExternalPackages: ['firebase-admin', 'bullmq', 'ioredis'],
-  },
+  serverExternalPackages: ['firebase-admin', 'bullmq', 'ioredis'],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {
