@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Search, RefreshCw, Wifi, WifiOff, Settings2, Loader2, ChevronLeft, ChevronRight, ToggleLeft, ToggleRight, Filter } from 'lucide-react';
+import {
+  Search, RefreshCw, Wifi, WifiOff, Settings2, Loader2,
+  ChevronLeft, ChevronRight, ToggleLeft, ToggleRight, Filter,
+  LayoutGrid, LayoutList, Battery, Smartphone, Signal, AlertCircle,
+} from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -17,6 +21,7 @@ interface RtdbDevice {
   network: string;
   ip: string;
   lastSeen?: number;
+  rtdbPath?: string;
 }
 
 function toStr(v: unknown): string { return v != null ? String(v).trim() : ''; }
@@ -54,16 +59,13 @@ function flattenObj(raw: Record<string, unknown>): Record<string, unknown> {
 }
 
 function isOnline(raw: Record<string, unknown>): boolean {
-  // boolean true
-  for (const k of ['online', 'Online', 'isOnline', 'IsOnline', 'connected', 'Connected', 'active', 'Active', 'isActive', 'IsActive', 'isConnected', 'IsConnected'])
+  for (const k of ['online','Online','isOnline','IsOnline','connected','Connected','active','Active','isActive','IsActive','isConnected','IsConnected'])
     if (raw[k] === true) return true;
-  // string "true" / "1" / "yes" / "online"
-  for (const k of ['online', 'Online', 'isOnline', 'connected', 'active', 'status', 'Status', 'connection', 'deviceStatus', 'state', 'State']) {
+  for (const k of ['online','Online','isOnline','connected','active','status','Status','connection','deviceStatus','state','State']) {
     const v = String(raw[k] ?? '').toLowerCase();
     if (v === 'true' || v === '1' || v === 'yes' || v === 'online' || v === 'connected' || v === 'active') return true;
   }
-  // timestamp-based: lastSeen within 5 minutes = online
-  const tsKeys = ['lastSeen', 'LastSeen', 'updatedAt', 'UpdatedAt', 'lastActive', 'LastActive', 'lastUpdate', 'timestamp', 'time', 'lastOnline'];
+  const tsKeys = ['lastSeen','LastSeen','updatedAt','UpdatedAt','lastActive','LastActive','lastUpdate','timestamp','time','lastOnline'];
   for (const k of tsKeys) {
     const ts = raw[k];
     if (typeof ts === 'number' && ts > 0) {
@@ -74,21 +76,21 @@ function isOnline(raw: Record<string, unknown>): boolean {
   return false;
 }
 
-function parseDevice(devId: string, rawOrig: Record<string, unknown>): RtdbDevice {
+function parseDevice(devId: string, rawOrig: Record<string, unknown>, path?: string): RtdbDevice {
   const raw = flattenObj(rawOrig);
   const online = isOnline(raw) || isOnline(rawOrig);
-  const brand = toStr(firstVal(raw, ['Brand', 'brand']));
-  const modelOnly = toStr(firstVal(raw, ['modelName', 'ModelName', 'model', 'Model', 'deviceModel', 'DeviceModel', 'device', 'Device', 'phoneModel']));
+  const brand = toStr(firstVal(raw, ['Brand','brand']));
+  const modelOnly = toStr(firstVal(raw, ['modelName','ModelName','model','Model','deviceModel','DeviceModel','device','Device','phoneModel']));
   const model = brand && modelOnly && !modelOnly.toLowerCase().startsWith(brand.toLowerCase())
     ? `${brand} ${modelOnly}` : (modelOnly || brand || '');
-  const android = toStr(firstVal(raw, ['version', 'Version', 'androidVersion', 'AndroidVersion', 'android', 'Android', 'osVersion', 'OsVersion']));
-  const battery = toNum(firstVal(raw, ['batteryPercent', 'BatteryPercent', 'battery', 'Battery', 'batteryLevel', 'BatteryLevel', 'bat', 'Bat', 'level', 'Level', 'charge', 'Charge', 'pct', 'percentage', 'Percentage', 'batteryPct', 'batLevel']));
-  const phone = toStr(firstVal(raw, ['mobNo', 'MobNo', 'phoneNumber', 'PhoneNumber', 'phone', 'Phone', 'number', 'Number', 'mobile', 'Mobile', 'mobileNumber']));
-  const network = toStr(firstVal(raw, ['provider', 'Provider', 'network', 'Network', 'networkType', 'NetworkType', 'operator', 'Operator', 'simOperator', 'carrier', 'Carrier']));
-  const ip = toStr(firstVal(raw, ['ip', 'IP', 'ipAddress', 'IpAddress']));
-  const lastSeen = toNum(firstVal(raw, ['lastSeen', 'LastSeen', 'updatedAt', 'UpdatedAt', 'timestamp', 'time']));
-  const displayName = model || toStr(firstVal(raw, ['name', 'Name', 'deviceName', 'DeviceName'])) || devId.slice(0, 12);
-  return { id: devId, displayName, online, model, android, battery, phone, network, ip, lastSeen };
+  const android = toStr(firstVal(raw, ['version','Version','androidVersion','AndroidVersion','android','Android','osVersion','OsVersion']));
+  const battery = toNum(firstVal(raw, ['batteryPercent','BatteryPercent','battery','Battery','batteryLevel','BatteryLevel','bat','Bat','level','Level','charge','Charge','pct','percentage','Percentage','batteryPct','batLevel']));
+  const phone = toStr(firstVal(raw, ['mobNo','MobNo','phoneNumber','PhoneNumber','phone','Phone','number','Number','mobile','Mobile','mobileNumber']));
+  const network = toStr(firstVal(raw, ['provider','Provider','network','Network','networkType','NetworkType','operator','Operator','simOperator','carrier','Carrier']));
+  const ip = toStr(firstVal(raw, ['ip','IP','ipAddress','IpAddress']));
+  const lastSeen = toNum(firstVal(raw, ['lastSeen','LastSeen','updatedAt','UpdatedAt','timestamp','time']));
+  const displayName = model || toStr(firstVal(raw, ['name','Name','deviceName','DeviceName'])) || devId.slice(0, 12);
+  return { id: devId, displayName, online, model, android, battery, phone, network, ip, lastSeen, rtdbPath: path };
 }
 
 function BatteryBadge({ val }: { val: number }) {
@@ -96,10 +98,11 @@ function BatteryBadge({ val }: { val: number }) {
   const cls = pct > 30 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
     : pct > 10 ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
     : 'bg-red-500/20 text-red-400 border-red-500/30';
+  const barCls = pct > 30 ? 'bg-emerald-400' : pct > 10 ? 'bg-amber-400' : 'bg-red-400';
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium border ${cls}`}>
       <span className="w-5 h-1.5 rounded-sm bg-current/20 overflow-hidden flex-shrink-0">
-        <span className="h-full block bg-current rounded-sm" style={{ width: `${pct}%` }} />
+        <span className={`h-full block rounded-sm ${barCls}`} style={{ width: `${pct}%` }} />
       </span>
       {pct}%
     </span>
@@ -118,9 +121,79 @@ function fmtTime(ts: number | undefined): string {
   return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
-const PAGE_SIZE = 15;
+function timeAgo(ts: number): string {
+  const diff = Math.floor((Date.now() - (ts > 9999999999 ? ts : ts * 1000)) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
 
+const PAGE_SIZE = 15;
 function loadStr(key: string): string { try { return localStorage.getItem(key) ?? ''; } catch { return ''; } }
+
+// ─── Device Card (grid view) ──────────────────────────────────────────────────
+function DeviceCard({ d, onClick }: { d: RtdbDevice; onClick: () => void }) {
+  const battCls = !d.battery ? 'text-slate-500'
+    : d.battery > 50 ? 'text-emerald-400' : d.battery > 20 ? 'text-amber-400' : 'text-red-400';
+  return (
+    <div
+      onClick={onClick}
+      className={`card p-4 cursor-pointer hover:border-slate-500/60 dark:hover:border-slate-500/60 transition-all group relative overflow-hidden ${
+        d.online
+          ? 'border-emerald-800/30 dark:border-emerald-800/40'
+          : 'border-slate-200/50 dark:border-slate-700/40'
+      }`}
+    >
+      {/* Online pulse strip */}
+      {d.online && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-emerald-500/80 to-teal-500/80" />
+      )}
+
+      {/* Header */}
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+            d.online ? 'bg-emerald-500/15 border border-emerald-500/30' : 'bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700'
+          }`}>
+            <Smartphone className={`w-4.5 h-4.5 ${d.online ? 'text-emerald-400' : 'text-slate-400'}`} />
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate max-w-[130px]">{d.displayName}</p>
+            {d.phone && <p className="text-xs text-slate-500 font-mono truncate">{d.phone}</p>}
+          </div>
+        </div>
+        <StatusBadge online={d.online} />
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="text-center p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
+          <Battery className={`w-3.5 h-3.5 mx-auto mb-0.5 ${battCls}`} />
+          <p className={`text-xs font-bold ${battCls}`}>{d.battery != null ? `${d.battery}%` : '—'}</p>
+        </div>
+        <div className="text-center p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
+          <Signal className="w-3.5 h-3.5 mx-auto mb-0.5 text-blue-400" />
+          <p className="text-[10px] text-slate-500 truncate font-medium">{d.network || '—'}</p>
+        </div>
+        <div className="text-center p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60">
+          <Wifi className={`w-3.5 h-3.5 mx-auto mb-0.5 ${d.ip ? 'text-violet-400' : 'text-slate-500'}`} />
+          <p className="text-[10px] text-slate-500 truncate font-mono">{d.ip || '—'}</p>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700/40">
+        <span className="text-[10px] font-mono text-slate-400 truncate max-w-[120px]">
+          {d.model}{d.android ? ` · A${d.android}` : ''}
+        </span>
+        <span className="text-[10px] text-slate-500 flex-shrink-0">
+          {d.lastSeen ? timeAgo(d.lastSeen) : '—'}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export default function DevicesPage() {
   const { idToken } = useAuth();
@@ -135,12 +208,26 @@ export default function DevicesPage() {
   const [autoUpdate, setAutoUpdate] = useState(true);
   const [page, setPage] = useState(1);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
+  const [activePaths, setActivePaths] = useState<string[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    setRtdbUrl(loadStr('panel_rtdb_url'));
-    setHasSa(!!loadStr('panel_service_account'));
+    const url = loadStr('panel_rtdb_url');
+    const sa = loadStr('panel_service_account');
+    setRtdbUrl(url);
+    setHasSa(!!sa);
+    // Restore view preference
+    try {
+      const v = localStorage.getItem('panel_devices_view') as 'table' | 'grid' | null;
+      if (v) setViewMode(v);
+    } catch { /**/ }
   }, []);
+
+  function switchView(v: 'table' | 'grid') {
+    setViewMode(v);
+    try { localStorage.setItem('panel_devices_view', v); } catch { /**/ }
+  }
 
   const fetchDevices = useCallback(async () => {
     const url = loadStr('panel_rtdb_url');
@@ -150,17 +237,65 @@ export default function DevicesPage() {
     setLoading(true);
     setError('');
     try {
-      let data: unknown;
+      let parsed: RtdbDevice[] = [];
+
       if (saRaw) {
+        // Try multi-path first to find all device nodes
         const res = await fetch('/api/admin-devices', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceAccount: JSON.parse(saRaw), rtdbUrl: url, path: '/clients' }),
-          signal: AbortSignal.timeout(15000),
+          body: JSON.stringify({
+            serviceAccount: JSON.parse(saRaw),
+            rtdbUrl: url,
+            path: '/clients',
+            multiPath: true,
+          }),
+          signal: AbortSignal.timeout(20000),
         });
-        const json = await res.json() as { data?: unknown; error?: string };
-        if (json.error) { setError(json.error); return; }
-        data = json.data;
+        const json = await res.json() as {
+          data?: Record<string, { path: string; data: unknown }>;
+          pathResults?: Record<string, unknown>;
+          activePaths?: string[];
+          error?: string;
+        };
+
+        if (json.error) {
+          setError(json.error);
+          return;
+        }
+
+        const paths = json.activePaths ?? [];
+        setActivePaths(paths);
+
+        if (json.data && Object.keys(json.data).length > 0) {
+          parsed = Object.entries(json.data)
+            .filter(([, v]) => v?.data && typeof v.data === 'object' && !Array.isArray(v.data))
+            .map(([id, { path, data }]) =>
+              parseDevice(id, data as Record<string, unknown>, path)
+            )
+            .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+        }
+
+        // If multi-path returned nothing, fallback to /clients only
+        if (parsed.length === 0) {
+          const fallback = await fetch('/api/admin-devices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              serviceAccount: JSON.parse(saRaw),
+              rtdbUrl: url,
+              path: '/clients',
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          const fj = await fallback.json() as { data?: unknown; error?: string };
+          if (!fj.error && fj.data && typeof fj.data === 'object' && !Array.isArray(fj.data)) {
+            parsed = Object.entries(fj.data as Record<string, unknown>)
+              .filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
+              .map(([id, raw]) => parseDevice(id, raw as Record<string, unknown>, '/clients'))
+              .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+          }
+        }
       } else {
         const base = url.replace(/\/$/, '');
         const res = await fetch(`${base}/clients.json?auth=${idToken}`, {
@@ -168,17 +303,19 @@ export default function DevicesPage() {
         });
         if (!res.ok) {
           setError(res.status === 401 || res.status === 403
-            ? 'Permission denied — add service account key in Settings or set role="panel" custom claim'
+            ? 'Permission denied — Settings mein service account key add karo'
             : `Firebase error: HTTP ${res.status}`);
           return;
         }
-        data = await res.json();
+        const data = await res.json() as unknown;
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          parsed = Object.entries(data as Record<string, unknown>)
+            .filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
+            .map(([id, raw]) => parseDevice(id, raw as Record<string, unknown>, '/clients'))
+            .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+        }
       }
-      if (!data || typeof data !== 'object') { setDevices([]); return; }
-      const parsed = Object.entries(data as Record<string, unknown>)
-        .filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
-        .map(([id, raw]) => parseDevice(id, raw as Record<string, unknown>))
-        .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+
       setDevices(parsed);
       setLastUpdated(new Date());
     } catch (e) {
@@ -188,10 +325,7 @@ export default function DevicesPage() {
     }
   }, [idToken]);
 
-  // auto-update
-  useEffect(() => {
-    fetchDevices();
-  }, [fetchDevices]);
+  useEffect(() => { fetchDevices(); }, [fetchDevices]);
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -204,14 +338,15 @@ export default function DevicesPage() {
   const filtered = devices.filter(d => {
     const q = search.toLowerCase();
     const matchSearch = !q || d.displayName.toLowerCase().includes(q) ||
-      d.phone.includes(q) || d.model.toLowerCase().includes(q) || d.network.toLowerCase().includes(q);
+      d.phone.includes(q) || d.model.toLowerCase().includes(q) || d.network.toLowerCase().includes(q) ||
+      d.ip.includes(q) || (d.rtdbPath ?? '').includes(q);
     const matchFilter = filter === 'all' || (filter === 'online' ? d.online : !d.online);
     return matchSearch && matchFilter;
   });
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const curPage = Math.min(page, totalPages);
-  const pageItems = filtered.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE);
+  const pageItems = viewMode === 'grid' ? filtered : filtered.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE);
   const onlineCount = devices.filter(d => d.online).length;
 
   if (!rtdbUrl && !loadStr('panel_rtdb_url')) {
@@ -234,11 +369,33 @@ export default function DevicesPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Devices</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}` : 'Loading…'}
-            {hasSa && <span className="ml-2 text-emerald-400 font-medium">· Admin Access</span>}
+            {lastUpdated
+              ? `Updated ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}`
+              : 'Loading…'}
+            {hasSa && <span className="ml-2 text-emerald-400 font-medium">· Admin</span>}
+            {activePaths.length > 0 && (
+              <span className="ml-2 text-blue-400 font-mono">· {activePaths.join(', ')}</span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex items-center border border-slate-200 dark:border-slate-700 rounded-lg p-0.5">
+            <button
+              onClick={() => switchView('table')}
+              className={`p-1.5 rounded transition-colors ${viewMode === 'table' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              title="Table view"
+            >
+              <LayoutList className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => switchView('grid')}
+              className={`p-1.5 rounded transition-colors ${viewMode === 'grid' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              title="Grid view"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
           <button
             onClick={() => setAutoUpdate(v => !v)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
@@ -248,7 +405,7 @@ export default function DevicesPage() {
             }`}
           >
             {autoUpdate ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
-            Auto Update
+            Auto
           </button>
           <button onClick={() => fetchDevices()} disabled={loading} className="btn-secondary p-2" title="Refresh">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
@@ -259,10 +416,10 @@ export default function DevicesPage() {
       {/* Stat Cards */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: 'Total Devices', val: devices.length, icon: '📱', gradient: 'from-emerald-600 to-emerald-500', bg: 'dark:bg-emerald-950/30', border: 'dark:border-emerald-800/50' },
-          { label: 'Online', val: onlineCount, icon: '📶', gradient: 'from-blue-600 to-blue-500', bg: 'dark:bg-blue-950/30', border: 'dark:border-blue-800/50' },
-          { label: 'Offline', val: devices.length - onlineCount, icon: '📴', gradient: 'from-red-600 to-red-500', bg: 'dark:bg-red-950/30', border: 'dark:border-red-800/50' },
-          { label: 'This Page', val: pageItems.length, icon: '📄', gradient: 'from-violet-600 to-violet-500', bg: 'dark:bg-violet-950/30', border: 'dark:border-violet-800/50' },
+          { label: 'Total Devices', val: devices.length, gradient: 'from-emerald-600 to-emerald-500', bg: 'dark:bg-emerald-950/30', border: 'dark:border-emerald-800/50' },
+          { label: 'Online', val: onlineCount, gradient: 'from-blue-600 to-blue-500', bg: 'dark:bg-blue-950/30', border: 'dark:border-blue-800/50' },
+          { label: 'Offline', val: devices.length - onlineCount, gradient: 'from-red-600 to-red-500', bg: 'dark:bg-red-950/30', border: 'dark:border-red-800/50' },
+          { label: 'Showing', val: filtered.length, gradient: 'from-violet-600 to-violet-500', bg: 'dark:bg-violet-950/30', border: 'dark:border-violet-800/50' },
         ].map(({ label, val, gradient, bg, border }) => (
           <div key={label} className={`card px-4 py-3 border ${bg} ${border}`}>
             <p className={`text-2xl font-extrabold bg-gradient-to-r ${gradient} bg-clip-text text-transparent`}>{val}</p>
@@ -273,8 +430,9 @@ export default function DevicesPage() {
 
       {/* Error */}
       {error && (
-        <div className="bg-red-950/40 border border-red-800/60 rounded-lg px-4 py-3 text-sm text-red-400">
-          {error}
+        <div className="bg-red-950/40 border border-red-800/60 rounded-lg px-4 py-3 text-sm text-red-400 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
         </div>
       )}
 
@@ -284,7 +442,7 @@ export default function DevicesPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="search"
-            placeholder="Search by name, model, phone number…"
+            placeholder="Search by name, model, phone, network, IP…"
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
             className="input pl-10 w-full"
@@ -310,87 +468,105 @@ export default function DevicesPage() {
         </div>
       </div>
 
-      {/* Table */}
+      {/* Loading state */}
       {loading && devices.length === 0 ? (
         <div className="card p-8 text-center">
           <Loader2 className="w-8 h-8 animate-spin text-slate-400 mx-auto mb-3" />
           <p className="text-sm text-slate-400">Firebase se data fetch ho raha hai…</p>
+          <p className="text-xs text-slate-600 mt-1">Multiple RTDB paths probe kar raha hai</p>
         </div>
       ) : filtered.length > 0 ? (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/60">
-                  {['STATUS', 'DEVICE NAME', 'MODEL', 'PHONE NUMBER', 'BATTERY', 'NETWORK', 'TIME & DATE'].map(col => (
-                    <th key={col} className="px-4 py-3 text-left text-[10px] font-bold text-slate-400 tracking-widest whitespace-nowrap">{col}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-700/40">
-                {pageItems.map((d, i) => (
-                  <tr key={d.id} onClick={() => router.push(`/devices/${d.id}`)} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer ${i % 2 === 0 ? '' : 'bg-slate-50/30 dark:bg-slate-800/20'}`}>
-                    <td className="px-4 py-3"><StatusBadge online={d.online} /></td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${d.online ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                        <span className="font-medium text-slate-900 dark:text-slate-100 truncate max-w-[140px]">{d.displayName}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400 font-mono text-xs">{d.model || d.android ? `${d.model}${d.android ? ` · Android ${d.android}` : ''}` : '—'}</td>
-                    <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">{d.phone || '—'}</td>
-                    <td className="px-4 py-3">{d.battery != null ? <BatteryBadge val={d.battery} /> : <span className="text-slate-500 text-xs">—</span>}</td>
-                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs">{d.network || d.ip || '—'}</td>
-                    <td className="px-4 py-3 text-slate-500 dark:text-slate-500 text-xs whitespace-nowrap">{fmtTime(d.lastSeen)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        viewMode === 'grid' ? (
+          // ── Grid / Card View ────────────────────────────────────────────────
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+            {filtered.map(d => (
+              <DeviceCard key={d.id} d={d} onClick={() => router.push(`/devices/${d.id}`)} />
+            ))}
           </div>
+        ) : (
+          // ── Table View ──────────────────────────────────────────────────────
+          <div className="card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800/60">
+                    {['STATUS', 'DEVICE NAME', 'MODEL', 'PHONE NUMBER', 'BATTERY', 'NETWORK', 'LAST SEEN'].map(col => (
+                      <th key={col} className="px-4 py-3 text-left text-[10px] font-bold text-slate-400 tracking-widest whitespace-nowrap">{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/40">
+                  {pageItems.map((d, i) => (
+                    <tr
+                      key={d.id}
+                      onClick={() => router.push(`/devices/${d.id}`)}
+                      className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer ${i % 2 === 0 ? '' : 'bg-slate-50/30 dark:bg-slate-800/20'}`}
+                    >
+                      <td className="px-4 py-3"><StatusBadge online={d.online} /></td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${d.online ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                          <span className="font-medium text-slate-900 dark:text-slate-100 truncate max-w-[140px]">{d.displayName}</span>
+                        </div>
+                        {d.rtdbPath && d.rtdbPath !== '/clients' && (
+                          <span className="text-[10px] text-blue-400 font-mono ml-5">{d.rtdbPath}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400 font-mono text-xs">{d.model}{d.android ? ` · A${d.android}` : ''}</td>
+                      <td className="px-4 py-3 font-mono text-slate-700 dark:text-slate-300">{d.phone || '—'}</td>
+                      <td className="px-4 py-3">{d.battery != null ? <BatteryBadge val={d.battery} /> : <span className="text-slate-500 text-xs">—</span>}</td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs">{d.network || d.ip || '—'}</td>
+                      <td className="px-4 py-3 text-slate-500 dark:text-slate-500 text-xs whitespace-nowrap">{fmtTime(d.lastSeen)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-slate-700/40 bg-slate-50/50 dark:bg-slate-800/30">
-            <p className="text-xs text-slate-400">
-              Showing {Math.min(filtered.length, (curPage - 1) * PAGE_SIZE + 1)}–{Math.min(filtered.length, curPage * PAGE_SIZE)} of {filtered.length} devices
-            </p>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={curPage === 1}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
-                let p: number;
-                if (totalPages <= 7) p = i + 1;
-                else if (curPage <= 4) p = i + 1;
-                else if (curPage >= totalPages - 3) p = totalPages - 6 + i;
-                else p = curPage - 3 + i;
-                return (
-                  <button
-                    key={p}
-                    onClick={() => setPage(p)}
-                    className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
-                      p === curPage
-                        ? 'bg-brand-600 text-white'
-                        : 'text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                );
-              })}
-              <button
-                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                disabled={curPage === totalPages}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500 transition-colors"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+            {/* Pagination (table only) */}
+            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-slate-700/40 bg-slate-50/50 dark:bg-slate-800/30">
+              <p className="text-xs text-slate-400">
+                Showing {Math.min(filtered.length, (curPage - 1) * PAGE_SIZE + 1)}–{Math.min(filtered.length, curPage * PAGE_SIZE)} of {filtered.length} devices
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={curPage === 1}
+                  className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500 transition-colors"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                  let p: number;
+                  if (totalPages <= 7) p = i + 1;
+                  else if (curPage <= 4) p = i + 1;
+                  else if (curPage >= totalPages - 3) p = totalPages - 6 + i;
+                  else p = curPage - 3 + i;
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => setPage(p)}
+                      className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
+                        p === curPage
+                          ? 'bg-brand-600 text-white'
+                          : 'text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={curPage === totalPages}
+                  className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-500 transition-colors"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )
       ) : !loading && (
         <div className="card p-10 text-center space-y-2">
           <WifiOff className="w-10 h-10 text-slate-600 mx-auto" />
@@ -398,17 +574,20 @@ export default function DevicesPage() {
             {error ? 'Firebase error' : devices.length === 0 ? 'Koi device nahi mila' : 'Search se koi match nahi mila'}
           </p>
           {devices.length === 0 && !error && (
-            <p className="text-sm text-slate-500">/clients path mein koi data nahi · Settings check karo</p>
+            <p className="text-sm text-slate-500">
+              /clients, /devices, /users jaise paths probe kiye — koi device data nahi mila<br />
+              <span className="text-xs text-slate-600 mt-1 block">Settings check karo ya device app se connect karo</span>
+            </p>
           )}
         </div>
       )}
 
-      {/* Quick stats footer */}
+      {/* Footer stats */}
       {devices.length > 0 && (
         <div className="flex items-center gap-4 text-xs text-slate-400 px-1">
           <span className="flex items-center gap-1"><Wifi className="w-3.5 h-3.5 text-emerald-400" /> {onlineCount} online</span>
           <span className="flex items-center gap-1"><WifiOff className="w-3.5 h-3.5 text-red-400" /> {devices.length - onlineCount} offline</span>
-          {autoUpdate && <span className="text-slate-500">· Auto-refresh every 30s</span>}
+          {autoUpdate && <span className="text-slate-500">· Auto-refresh 30s</span>}
         </div>
       )}
     </div>
